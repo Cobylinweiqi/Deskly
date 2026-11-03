@@ -124,7 +124,7 @@ Deskly 做两件事：
 - 作用域声明在 [`app/src/main/resources/META-INF/xposed/scope.list`](app/src/main/resources/META-INF/xposed/scope.list)，默认 `com.miui.home`；
 - 运行需要 [LSPosed](https://github.com/LSPosed/LSPosed) 框架。
 
-> 关于上架 LSPosed 在线模块库（[modules.lsposed.org](https://modules.lsposed.org)）：官方要求包名使用 `io.github.<用户名>.*` 前缀，或自持域名并配置 TXT 校验。本项目包名是 `com.coby.deskly`，因此**暂未提交**官方仓库。如果你希望它能被 LSPosed 客户端一键安装，见 [docs/上架官方模块库.md](docs/上架官方模块库.md)。
+> 关于上架 LSPosed 在线模块库（[modules.lsposed.org](https://modules.lsposed.org)）：包名已按官方要求改为 `io.github.cobylinweiqi.deskly`，并提交到 [Xposed-Modules-Repo](https://github.com/Xposed-Modules-Repo)。收录后可直接在 LSPosed 客户端的「在线仓库」里搜到、一键安装与更新。提交与发版备忘见 [docs/上架官方模块库.md](docs/上架官方模块库.md)。
 
 ---
 

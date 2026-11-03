@@ -3,15 +3,15 @@ plugins {
 }
 
 android {
-    namespace = "com.coby.deskly"
+    namespace = "io.github.cobylinweiqi.deskly"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.coby.deskly"
+        applicationId = "io.github.cobylinweiqi.deskly"
         minSdk = 26
         targetSdk = 34
-        versionCode = 20
-        versionName = "0.12.4"
+        versionCode = 21
+        versionName = "0.13.0"
     }
 
     // libxposed 的模块描述文件必须原样进 APK 根目录，不能被 shrink/merge 规则丢弃
