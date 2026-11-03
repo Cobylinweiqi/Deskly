@@ -188,12 +188,10 @@ echo "sdk.dir=/path/to/Android/sdk" > local.properties
 Deskly 是业余时间写的，不收钱、不放广告、不收集数据。如果它确实帮你把桌面收拾干净了，可以请我喝一杯咖啡 —— **金额随意，不打赏也完全不影响使用**。
 
 <div align="center">
-  <img src="docs/donate.svg" width="260" alt="请作者喝咖啡">
+  <img src="docs/donate.jpg" width="240" alt="支付宝收款码 · 请作者喝咖啡">
   <br>
-  <sub>微信 / 支付宝 扫码 · 感谢每一份心意</sub>
+  <sub>支付宝扫码 · 感谢每一份心意</sub>
 </div>
-
-<!-- 维护者：把 docs/donate.svg 换成你自己的收款码图片（png/svg 均可），再更新上面的 src。 -->
 
 ---
 
