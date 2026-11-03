@@ -7,7 +7,6 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageInfo;
 import android.net.Uri;
-import android.os.Build;
 import android.view.View;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -21,6 +20,9 @@ import com.coby.deskly.R;
  * 把版本号从 {@code PackageManager} 读出来（升版本只改 build.gradle.kts 一处，
  * 界面上不会出现"装的是新的、写的是旧的"）、把 GitHub 与捐赠变成真能点的入口、
  * 长按复制仓库地址（手机上想贴到浏览器或聊天窗口时，比手抄一条 URL 现实）。
+ *
+ * <p><b>只显示版本名，不带构建号。</b>构建号是发版内部用的序号，用户反馈问题时说的
+ * 永远是"0.12.x"；两个数字挤在一行，反而让真正要读的那个变得不显眼。
  *
  * <p>捐赠没有在 App 里塞二维码：这个仓库的收款码是要维护者自己替换的占位图，
  * 把它打进 APK 只会得到一张扫不出来的图。点「打开」跳到项目主页，README 里那一节
@@ -39,9 +41,9 @@ public final class AboutSection {
         TextView tvVersion = root.findViewById(R.id.tvAboutVersion);
         TextView tvHint = root.findViewById(R.id.tvAboutHint);
         String name = versionName();
-        String code = buildCode();
-        String full = "v" + name + (code.isEmpty() ? "" : "（构建 " + code + "）");
-        tvVersion.setText(full);
+        // 只显示版本名。构建号对用户没有意义（问题反馈时看的是版本名），
+        // 放在同一行反而把「v0.12.3」这个真正要读的东西挤成了次要信息。
+        tvVersion.setText("v" + name);
         tvHint.setText("v" + name + " · Coby");
 
         View github = root.findViewById(R.id.rowAboutGithub);
@@ -52,7 +54,7 @@ public final class AboutSection {
         });
 
         root.findViewById(R.id.btnAboutDonate).setOnClickListener(v ->
-                open(GITHUB, "往下翻到「请作者喝咖啡」一节，扫码即可；完全自愿。"));
+                open(GITHUB, "收款码在项目主页「请作者喝咖啡」一节"));
     }
 
     // ───────────────────────── 打开与复制 ─────────────────────────
@@ -95,16 +97,6 @@ public final class AboutSection {
     private String versionName() {
         PackageInfo pi = info();
         return pi == null || pi.versionName == null ? "" : pi.versionName;
-    }
-
-    private String buildCode() {
-        PackageInfo pi = info();
-        if (pi == null) {
-            return "";
-        }
-        // getLongVersionCode 是 API 28 才有的，minSdk 26 要留一条老路
-        long code = Build.VERSION.SDK_INT >= 28 ? pi.getLongVersionCode() : pi.versionCode;
-        return String.valueOf(code);
     }
 
     private void toast(String s) {

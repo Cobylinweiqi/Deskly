@@ -6,7 +6,7 @@
 
 按颜色 / 按功能一键重排全部图标 · 备份精确到每一个图标 · LSPosed 模块
 
-[![Release](https://img.shields.io/badge/release-0.12.3-4F46E5)](https://github.com/Cobylinweiqi/Deskly/releases/latest)
+[![Release](https://img.shields.io/badge/release-0.12.4-4F46E5)](https://github.com/Cobylinweiqi/Deskly/releases/latest)
 [![Stars](https://img.shields.io/github/stars/Cobylinweiqi/Deskly?label=stars&color=4F46E5)](https://github.com/Cobylinweiqi/Deskly/stargazers)
 [![Android](https://img.shields.io/badge/Android-8.0%2B-3DDC84?logo=android&logoColor=white)](#环境要求)
 [![LSPosed](https://img.shields.io/badge/LSPosed-API%20101-7F5AF0)](https://github.com/LSPosed/LSPosed)
@@ -49,7 +49,7 @@ Deskly 做两件事：
 | **自动快照** | 写入前自动存一份，出问题随时退回 |
 | **备份与恢复** | 每份备份可展开到每个图标；恢复直接覆盖，不再额外备份 |
 | **运行引导** | LSPosed / 作用域 / root / 重启桌面 / 电池优化，能查的写清状态，查不到的直说 |
-| **关于** | 版本号 / 作者 / GitHub 反馈入口 / 免责声明 / 捐赠，联系方式不用去翻仓库 |
+| **关于** | 版本号 / 作者 / GitHub 反馈入口 / 免责声明 / 捐赠，四行看完 |
 
 ---
 
@@ -112,7 +112,7 @@ Deskly 做两件事：
   - 「备份当前桌面」存一份完整快照，显示 **N 个图标**；
   - 点「展开明细」可看到每个文件夹在第几屏、里面装了哪些应用（带图标）；
   - 恢复**直接覆盖**，不会先替你备份。想留退路，请先手动点一次备份。
-- **关于**（默认折叠）：版本号（含构建号）、作者、GitHub 入口（长按复制地址，欢迎提 issue）、免责声明、捐赠与版权说明。版本号从 `PackageManager` 读，不会和 APK 对不上。
+- **关于**（默认折叠）：版本号、作者、GitHub 入口（点击打开、长按复制地址，欢迎提 issue）、免责声明、捐赠与版权。内容刻意保持四行可扫完；版本号从 `PackageManager` 读，不会和 APK 对不上。
 
 ---
 

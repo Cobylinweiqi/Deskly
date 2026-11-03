@@ -835,19 +835,11 @@
                                 android:textStyle="bold" />
                         </LinearLayout>
 
-                        <TextView
-                            style="@style/CardBody"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:layout_marginTop="6dp"
-                            android:text="装完没反应、某台机器上排错格、想加一套新的分类规则，都可以直接开 issue。描述里带上机型、桌面版本与「关于」里的版本号，能省好几轮来回。"
-                            android:textSize="11.5sp" />
-
                         <!-- 免责声明 -->
                         <TextView
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:layout_marginTop="16dp"
+                            android:layout_marginTop="14dp"
                             android:letterSpacing="0.08"
                             android:text="免责声明"
                             android:textColor="@color/text_tertiary"
@@ -859,7 +851,7 @@
                             android:layout_height="wrap_content"
                             android:layout_marginTop="4dp"
                             android:lineSpacingExtra="4dp"
-                            android:text="本模块按「现状」提供，不附带任何明示或暗示的担保。整理与恢复会直接改写桌面的数据库文件——虽然每次动手前都会自动拍快照，仍然存在布局丢失、图标错位的可能，请自行评估后再用。作者不对任何数据丢失、设备异常或由此产生的连带损失负责。Deskly 与小米、LSPosed 官方均无关联，属个人非官方项目。"
+                            android:text="按「现状」提供，不附带担保。整理与恢复会直接改写桌面数据库，动手前虽自动快照，仍有布局丢失的可能，请自行评估；作者不承担由此产生的损失。与小米、LSPosed 官方均无关联。"
                             android:textColor="@color/text_secondary"
                             android:textSize="12sp" />
 
@@ -871,28 +863,14 @@
                             android:gravity="center_vertical"
                             android:orientation="horizontal">
 
-                            <LinearLayout
+                            <TextView
                                 android:layout_width="0dp"
                                 android:layout_height="wrap_content"
                                 android:layout_weight="1"
-                                android:orientation="vertical">
-
-                                <TextView
-                                    android:layout_width="match_parent"
-                                    android:layout_height="wrap_content"
-                                    android:text="请作者喝咖啡"
-                                    android:textColor="@color/text_primary"
-                                    android:textSize="12sp"
-                                    android:textStyle="bold" />
-
-                                <TextView
-                                    android:layout_width="match_parent"
-                                    android:layout_height="wrap_content"
-                                    android:layout_marginTop="2dp"
-                                    android:text="完全自愿。收款码在项目主页的「请作者喝咖啡」一节。"
-                                    android:textColor="@color/text_secondary"
-                                    android:textSize="11sp" />
-                            </LinearLayout>
+                                android:text="请作者喝咖啡"
+                                android:textColor="@color/text_primary"
+                                android:textSize="12sp"
+                                android:textStyle="bold" />
 
                             <TextView
                                 android:id="@+id/btnAboutDonate"
@@ -929,7 +907,7 @@
                                 android:layout_width="0dp"
                                 android:layout_height="wrap_content"
                                 android:layout_weight="1"
-                                android:text="保留所有权利 · 未经授权禁止转载、二次打包与商用"
+                                android:text="保留所有权利 · 禁止未授权转载"
                                 android:textColor="@color/text_secondary"
                                 android:textSize="11.5sp" />
                         </LinearLayout>
