@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 统计小格：比卡片白底深一档，用来承载"155 / 18 / 4"这类数字。
+     不用描边——三个格子并排时描边会连成栅栏，比数字还抢眼 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <solid android:color="@color/surface_alt" />
+    <corners android:radius="10dp" />
+</shape>

@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="bg">#F4F5F7</color>
+    <color name="surface">#FFFFFF</color>
+    <color name="surface_alt">#F0F1F4</color>
+    <color name="text_primary">#111827</color>
+    <color name="text_secondary">#6B7280</color>
+    <color name="text_tertiary">#9CA3AF</color>
+    <color name="accent">#4F46E5</color>
+    <color name="accent_soft">#EEF0FE</color>
+    <!-- 虚线圈用的淡靛：直接用 accent 画虚线在浅底上太吵 -->
+    <color name="accent_line">#C7CBF7</color>
+    <color name="ok">#059669</color>
+    <color name="ok_soft">#E7F6EF</color>
+    <color name="warn">#B45309</color>
+    <color name="warn_soft">#FDF3E3</color>
+    <color name="divider">#E5E7EB</color>
+    <color name="code_bg">#111827</color>
+    <color name="code_text">#D1D5DB</color>
+</resources>

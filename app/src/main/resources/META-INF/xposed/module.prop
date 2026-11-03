@@ -1,0 +1,8 @@
+# libxposed 模块描述（Java Properties 格式）
+# 键名与语义以 https://libxposed.github.io/api/ 为准
+minApiVersion=101
+targetApiVersion=101
+# 不锁定作用域，用户可在 LSPosed 里自由增删目标桌面
+staticScope=false
+# 任何 Hook 抛出的异常都被框架拦下，绝不冒泡到目标进程
+exceptionMode=protective

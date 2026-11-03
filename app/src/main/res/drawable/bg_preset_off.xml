@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 未选中的预设方案：浅灰底，无描边，避免和已选中项抢注意力 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <solid android:color="@color/surface_alt" />
+    <corners android:radius="12dp" />
+</shape>

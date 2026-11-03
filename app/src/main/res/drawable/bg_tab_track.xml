@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 分段控件的底槽：比卡片背景深一档，让上面的白色滑块有"浮起"的感觉 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <solid android:color="@color/surface_alt" />
+    <corners android:radius="13dp" />
+</shape>

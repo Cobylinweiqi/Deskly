@@ -1,0 +1,702 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 两页结构：首页是"分析 → 选方案 → 预览并写入"的一条直线，
+     第二页是「配置」：运行引导 + 备份与恢复（诊断与运行状态已在 0.12.0 移除）。
+     页一的层级按用户实际动作的顺序排，不再把"精细归位"放在首屏——
+     它是对整理结果的微调，不该和分析入口抢位置。 -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical">
+
+    <!-- ── 顶部 ──
+         0.12.2 起压成一行：原来两行（标题 + 副标题）在 4×6 屏上白占 60dp，
+         副标题「桌面整理 · LSPosed 模块」说的正是这个 App 本身，读一遍没有新信息。
+         腾出来的位置放版本号——用户报问题时第一个要问的就是"你装的是哪个版本"。 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="16dp"
+        android:layout_marginTop="10dp"
+        android:layout_marginEnd="16dp"
+        android:background="@drawable/bg_header"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingStart="18dp"
+        android:paddingTop="10dp"
+        android:paddingEnd="18dp"
+        android:paddingBottom="10dp">
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:letterSpacing="0.04"
+            android:text="Deskly"
+            android:textColor="#FFFFFF"
+            android:textSize="19sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/tvBannerVersion"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:alpha="0.75"
+            android:textColor="#FFFFFF"
+            android:textSize="11sp" />
+    </LinearLayout>
+
+    <!-- ── Tab ── -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="16dp"
+        android:layout_marginTop="12dp"
+        android:layout_marginEnd="16dp"
+        android:background="@drawable/bg_tab_track"
+        android:orientation="horizontal"
+        android:padding="3dp">
+
+        <TextView
+            android:id="@+id/tabOrganize"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:background="@drawable/bg_tab_on"
+            android:gravity="center"
+            android:paddingTop="9dp"
+            android:paddingBottom="9dp"
+            android:text="整理"
+            android:textColor="@color/text_primary"
+            android:textSize="13sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/tabConfig"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:paddingTop="9dp"
+            android:paddingBottom="9dp"
+            android:text="配置"
+            android:textColor="@color/text_secondary"
+            android:textSize="13sp" />
+    </LinearLayout>
+
+    <FrameLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1">
+
+        <!-- ═══════════ 页一：分析 → 选方案 → 预览并写入 ═══════════ -->
+        <LinearLayout
+            android:id="@+id/pageOrganize"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:orientation="vertical">
+
+            <ScrollView
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:scrollbars="none">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:paddingStart="16dp"
+                    android:paddingTop="12dp"
+                    android:paddingEnd="16dp"
+                    android:paddingBottom="20dp">
+
+                    <!-- 只在真的缺东西时才出现，正常状态下不占位置 -->
+                    <TextView
+                        android:id="@+id/tvMainWarn"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginBottom="12dp"
+                        android:background="@drawable/bg_warn_block"
+                        android:padding="12dp"
+                        android:textColor="@color/warn"
+                        android:textSize="12sp"
+                        android:visibility="gone" />
+
+                    <!-- ── 第一步：分析 ── -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:background="@drawable/bg_card"
+                        android:orientation="vertical"
+                        android:padding="16dp">
+
+                        <TextView style="@style/StepLabel"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="第一步 · 分析桌面" />
+
+                        <TextView
+                            style="@style/CardBody"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="6dp"
+                            android:text="读取桌面上的全部应用图标——文件夹里的、散在桌面上的都算——按颜色和功能各归一次类。" />
+
+                        <TextView
+                            android:id="@+id/tvDeskStatus"
+                            style="@style/CardBody"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="10dp"
+                            android:text="还没分析。点下面的按钮开始。" />
+
+                        <!-- 三个数字：应用图标 / 现有文件夹 / 屏数 -->
+                        <LinearLayout
+                            android:id="@+id/cardStats"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="12dp"
+                            android:orientation="horizontal"
+                            android:visibility="gone">
+
+                            <LinearLayout
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:background="@drawable/bg_stat"
+                                android:gravity="center"
+                                android:orientation="vertical"
+                                android:paddingTop="10dp"
+                                android:paddingBottom="9dp">
+
+                                <TextView
+                                    android:id="@+id/tvStatApps"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:text="—"
+                                    android:textColor="@color/text_primary"
+                                    android:textSize="18sp"
+                                    android:textStyle="bold" />
+
+                                <TextView
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:layout_marginTop="2dp"
+                                    android:text="应用图标"
+                                    android:textColor="@color/text_tertiary"
+                                    android:textSize="10.5sp" />
+                            </LinearLayout>
+
+                            <LinearLayout
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_marginStart="8dp"
+                                android:layout_weight="1"
+                                android:background="@drawable/bg_stat"
+                                android:gravity="center"
+                                android:orientation="vertical"
+                                android:paddingTop="10dp"
+                                android:paddingBottom="9dp">
+
+                                <TextView
+                                    android:id="@+id/tvStatFolders"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:text="—"
+                                    android:textColor="@color/text_primary"
+                                    android:textSize="18sp"
+                                    android:textStyle="bold" />
+
+                                <TextView
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:layout_marginTop="2dp"
+                                    android:text="现有文件夹"
+                                    android:textColor="@color/text_tertiary"
+                                    android:textSize="10.5sp" />
+                            </LinearLayout>
+
+                            <LinearLayout
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_marginStart="8dp"
+                                android:layout_weight="1"
+                                android:background="@drawable/bg_stat"
+                                android:gravity="center"
+                                android:orientation="vertical"
+                                android:paddingTop="10dp"
+                                android:paddingBottom="9dp">
+
+                                <TextView
+                                    android:id="@+id/tvStatScreens"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:text="—"
+                                    android:textColor="@color/text_primary"
+                                    android:textSize="18sp"
+                                    android:textStyle="bold" />
+
+                                <TextView
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:layout_marginTop="2dp"
+                                    android:text="桌面屏数"
+                                    android:textColor="@color/text_tertiary"
+                                    android:textSize="10.5sp" />
+                            </LinearLayout>
+                        </LinearLayout>
+
+                        <TextView
+                            android:id="@+id/tvDeskNote"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="10dp"
+                            android:lineSpacingExtra="2dp"
+                            android:textColor="@color/warn"
+                            android:textSize="11sp"
+                            android:visibility="gone" />
+
+                        <Button
+                            android:id="@+id/btnDeskLoad"
+                            style="@style/BtnPrimary"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="12dp"
+                            android:text="分析桌面全部图标" />
+                    </LinearLayout>
+
+                    <!-- ── 第二步：选方案 ── -->
+                    <LinearLayout
+                        android:id="@+id/cardPlan"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="12dp"
+                        android:background="@drawable/bg_card"
+                        android:orientation="vertical"
+                        android:padding="16dp">
+
+                        <TextView style="@style/StepLabel"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="第二步 · 选一个方案" />
+
+                        <TextView
+                            style="@style/CardBody"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="6dp"
+                            android:text="两个方案随时可换，选中就按它重算下面的分组与屏位。" />
+
+                        <!-- 两张等宽卡片，由 PlanSection 在代码里构建 -->
+                        <LinearLayout
+                            android:id="@+id/presetContainer"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="12dp"
+                            android:baselineAligned="false"
+                            android:orientation="horizontal" />
+
+                        <CheckBox
+                            android:id="@+id/cbFirstBlank"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="12dp"
+                            android:buttonTint="@color/accent"
+                            android:minHeight="40dp"
+                            android:paddingStart="0dp"
+                            android:paddingTop="6dp"
+                            android:paddingEnd="0dp"
+                            android:paddingBottom="6dp"
+                            android:text="第一屏留空（只留小组件）"
+                            android:textColor="@color/text_primary"
+                            android:textSize="13sp" />
+
+                        <TextView
+                            android:id="@+id/tvPlanSummary"
+                            style="@style/CardBody"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:text="分析后显示排布" />
+
+                        <LinearLayout
+                            android:id="@+id/screenContainer"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="vertical" />
+                    </LinearLayout>
+
+                    <!-- ── 第三步：预览并写入（分析之后才出现） ── -->
+                    <LinearLayout
+                        android:id="@+id/cardGroups"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="12dp"
+                        android:background="@drawable/bg_card"
+                        android:orientation="vertical"
+                        android:padding="16dp"
+                        android:visibility="gone">
+
+                        <TextView style="@style/StepLabel"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="第三步 · 预览并写入" />
+
+                        <TextView
+                            android:id="@+id/tvGroupSummary"
+                            style="@style/CardBody"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="6dp" />
+
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="4dp"
+                            android:text="点分组可展开全部图标 · 点右侧屏号可改这一组放第几屏"
+                            android:textColor="@color/text_tertiary"
+                            android:textSize="11sp" />
+
+                        <LinearLayout
+                            android:id="@+id/groupContainer"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="2dp"
+                            android:orientation="vertical" />
+                    </LinearLayout>
+
+                    <!-- ── 精细归位：整理之后的微调，默认折叠 ── -->
+                    <LinearLayout
+                        android:id="@+id/cardRelocate"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="12dp"
+                        android:background="@drawable/bg_card"
+                        android:orientation="vertical"
+                        android:paddingStart="16dp"
+                        android:paddingTop="4dp"
+                        android:paddingEnd="16dp"
+                        android:paddingBottom="4dp">
+
+                        <LinearLayout
+                            android:id="@+id/rowRelocateHead"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:background="?android:attr/selectableItemBackground"
+                            android:gravity="center_vertical"
+                            android:minHeight="46dp"
+                            android:orientation="horizontal">
+
+                            <TextView
+                                style="@style/SectionLabel"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:text="精细归位（可选）" />
+
+                            <TextView
+                                android:id="@+id/tvRelocateToggle"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="展开 ⌄"
+                                android:textColor="@color/text_secondary"
+                                android:textSize="11.5sp" />
+                        </LinearLayout>
+
+                        <LinearLayout
+                            android:id="@+id/boxRelocate"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="vertical"
+                            android:paddingBottom="12dp"
+                            android:visibility="gone">
+
+                            <TextView
+                                style="@style/CardBody"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:text="不动整体结构，只把散落和放错的图标挪到合适的文件夹，每条可改可取消。" />
+
+                            <TextView
+                                android:id="@+id/tvRelocateStatus"
+                                style="@style/CardBody"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="8dp"
+                                android:text="还没分析。" />
+
+                            <Button
+                                android:id="@+id/btnRelocate"
+                                style="@style/BtnGhost"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="12dp"
+                                android:text="分析放错的图标" />
+
+                            <LinearLayout
+                                android:id="@+id/relocateList"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:orientation="vertical" />
+
+                            <Button
+                                android:id="@+id/btnRelocateApply"
+                                style="@style/BtnPrimary"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="14dp"
+                                android:text="应用改动"
+                                android:visibility="gone" />
+                        </LinearLayout>
+                    </LinearLayout>
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="14dp"
+                        android:lineSpacingExtra="4dp"
+                        android:text="· 只动桌面图标，底部固定栏与小组件原地不动\n· 写入前自动拍快照，改坏了能退回"
+                        android:textColor="@color/text_tertiary"
+                        android:textSize="11sp" />
+                </LinearLayout>
+            </ScrollView>
+
+            <!-- ── 底部应用条：分析出结果才浮出，始终可点，不用滚到底 ── -->
+            <LinearLayout
+                android:id="@+id/applyBar"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="@color/surface"
+                android:orientation="vertical"
+                android:visibility="gone">
+
+                <View
+                    android:layout_width="match_parent"
+                    android:layout_height="1dp"
+                    android:background="@color/divider" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:paddingStart="16dp"
+                    android:paddingTop="10dp"
+                    android:paddingEnd="16dp"
+                    android:paddingBottom="14dp">
+
+                    <TextView
+                        android:id="@+id/tvApplyHint"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="center"
+                        android:textColor="@color/text_tertiary"
+                        android:textSize="11sp" />
+
+                    <Button
+                        android:id="@+id/btnDeskApply"
+                        style="@style/BtnPrimary"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="7dp"
+                        android:text="应用方案" />
+                </LinearLayout>
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- ═══════════ 页二：配置（运行引导 · 备份与恢复） ═══════════ -->
+        <ScrollView
+            android:id="@+id/pageConfig"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:scrollbars="none"
+            android:visibility="gone">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:paddingStart="16dp"
+                android:paddingTop="12dp"
+                android:paddingEnd="16dp"
+                android:paddingBottom="28dp">
+
+                <!-- ── 卡片一：运行引导（默认折叠，点标题展开） ── -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:background="@drawable/bg_card"
+                    android:orientation="vertical"
+                    android:padding="16dp">
+
+                    <LinearLayout
+                        android:id="@+id/rowGuideHead"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <TextView style="@style/StepLabel"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="运行引导" />
+
+                        <TextView
+                            android:id="@+id/tvGuideToggle"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="展开 ⌄"
+                            android:textColor="@color/accent"
+                            android:textSize="11sp"
+                            android:textStyle="bold" />
+                    </LinearLayout>
+
+                    <!-- 收起时露这一行摘要，展开时让位给正文 -->
+                    <TextView
+                        android:id="@+id/tvGuideHint"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="4dp"
+                        android:text="正在检测…"
+                        android:textColor="@color/text_tertiary"
+                        android:textSize="11sp" />
+
+                    <LinearLayout
+                        android:id="@+id/boxGuide"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:visibility="gone">
+
+                        <TextView
+                            style="@style/CardBody"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:text="刚装好？按下面 5 步把 Deskly 接到桌面上。前 4 步缺一步都写不进桌面，第 5 步可选。能自动检测的会直接写在步骤里，查不到的会说明。" />
+
+                        <!-- 步骤行由 GuideSection 在代码里构建 -->
+                        <LinearLayout
+                            android:id="@+id/guideSteps"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="vertical" />
+
+                        <TextView
+                            android:id="@+id/tvGuideFacts"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="14dp"
+                            android:lineSpacingExtra="3dp"
+                            android:textColor="@color/text_tertiary"
+                            android:textSize="11sp" />
+
+                        <Button
+                            android:id="@+id/btnGuideRecheck"
+                            style="@style/BtnPrimary"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="12dp"
+                            android:text="重新检测" />
+                    </LinearLayout>
+                </LinearLayout>
+
+                <!-- ── 卡片二：备份与恢复（默认折叠，点标题展开） ── -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:background="@drawable/bg_card"
+                    android:orientation="vertical"
+                    android:padding="16dp">
+
+                    <LinearLayout
+                        android:id="@+id/rowBackupHead"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <TextView style="@style/StepLabel"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="备份与恢复" />
+
+                        <TextView
+                            android:id="@+id/tvBackupToggle"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="展开 ⌄"
+                            android:textColor="@color/accent"
+                            android:textSize="11sp"
+                            android:textStyle="bold" />
+                    </LinearLayout>
+
+                    <TextView
+                        android:id="@+id/tvBackupHint"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="4dp"
+                        android:text="正在检测…"
+                        android:textColor="@color/text_tertiary"
+                        android:textSize="11sp" />
+
+                    <LinearLayout
+                        android:id="@+id/boxBackup"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:visibility="gone">
+
+                        <TextView
+                            style="@style/CardBody"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:text="每份备份都是一张完整的桌面：每个图标在哪个文件夹、文件夹在第几屏第几格。点开一份就能逐图标核对。恢复直接覆盖，不会再额外存一份。" />
+
+                        <TextView
+                            android:id="@+id/tvBackupStatus"
+                            style="@style/CardBody"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="10dp"
+                            android:text="正在检测…" />
+
+                        <Button
+                            android:id="@+id/btnBackup"
+                            style="@style/BtnPrimary"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="12dp"
+                            android:text="备份当前桌面" />
+
+                        <TextView
+                            android:id="@+id/tvBackupHead"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="14dp"
+                            android:textColor="@color/text_tertiary"
+                            android:textSize="11sp" />
+
+                        <LinearLayout
+                            android:id="@+id/backupList"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="vertical" />
+                    </LinearLayout>
+                </LinearLayout>
+
+                <TextView
+                    android:id="@+id/tvFooter"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="16dp"
+                    android:lineSpacingExtra="4dp"
+                    android:textColor="@color/text_tertiary"
+                    android:textSize="11sp" />
+            </LinearLayout>
+        </ScrollView>
+    </FrameLayout>
+</LinearLayout>

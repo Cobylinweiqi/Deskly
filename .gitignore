@@ -1,0 +1,28 @@
+# Gradle 与构建产物：源码仓库不存二进制，发布走 GitHub Releases
+.gradle/
+build/
+app/build/
+*.apk
+*.aab
+*.ap_
+*.dex
+
+# 本机路径（sdk.dir、ndk.dir），进了仓库只会让别人 clone 下来就报错
+local.properties
+
+# IDE
+.idea/
+*.iml
+captures/
+.navigation/
+
+# macOS
+.DS_Store
+._*
+
+# 会话工具的工作区数据：含本机路径、设备信息与调试记录，不进公开仓库
+.workbuddy/
+
+# 签名文件：绝不入库
+*.jks
+*.keystore

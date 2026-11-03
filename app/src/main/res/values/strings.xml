@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Deskly</string>
+    <string name="module_desc">桌面整理框架：自动分类、一键归位</string>
+</resources>
