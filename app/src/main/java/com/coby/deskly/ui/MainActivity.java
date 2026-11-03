@@ -31,8 +31,9 @@ import java.util.List;
  * 其中运行状态只是一行版本号、诊断要手动扫一遍才出报告——对刚装好的用户，
  * 真正的问题是"我该开哪些权限、模块到底有没有生效"，而不是"有多少个候选类"。
  * 现在只留两张卡：<b>运行引导</b>（LSPosed / 作用域 / root / 重启桌面，能查的查、
- * 查不到的直说）与<b>备份与恢复</b>（精确到每个图标，恢复不再额外备份）。
- * 两张卡都默认收起（见 {@link Fold}）：不收起时一屏放不下，想点下面那张得先划过一整张。
+ * 查不到的直说）与<b>备份与恢复</b>（精确到每个图标，恢复不再额外备份）；
+ * 0.12.3 又在页尾补了<b>关于</b>（版本 / 作者 / 反馈入口 / 免责声明 / 捐赠）。
+ * 三张卡都默认收起（见 {@link Fold}）：不收起时一屏放不下，想点下面那张得先划过一整张。
  *
  * <p>这里不假装能"查询模块是否已激活"——LSPosed 没有给模块 App 提供这种查询接口。
  * 能确定的事实（桌面是否安装、root 能不能用）就直说，不能确定的就告诉用户去哪检查。
@@ -52,6 +53,7 @@ public class MainActivity extends Activity {
     private PlanSection plan;
     private GuideSection guide;
     private BackupSection backup;
+    private AboutSection about;
     private DesktopSection desktop;
     private RelocateSection relocate;
 
@@ -124,6 +126,9 @@ public class MainActivity extends Activity {
         });
         backup.refresh();
 
+        // 「关于」没有异步探测，构造完就能用：版本号读一次，两个入口挂上点击
+        about = new AboutSection(this, pageConfig);
+
         // 归位区块依赖"改坏了能退回去"，归位写入前会自己拍快照，不等用户切 tab
         relocate = new RelocateSection(this, DEFAULT_TARGET,
                 (TextView) findViewById(R.id.tvRelocateStatus),
@@ -159,7 +164,7 @@ public class MainActivity extends Activity {
         tabOrganize.setOnClickListener(v -> selectTab(true));
         tabConfig.setOnClickListener(v -> selectTab(false));
 
-        // 配置页两张卡默认收起：收起后一屏就能看全"运行引导 / 备份与恢复"两件事，
+        // 配置页三张卡默认收起：收起后一屏就能看全"运行引导 / 备份与恢复 / 关于"，
         // 要点哪件再展开哪件。折叠时露一行摘要，不用展开也知道状态。
         Fold.bind(findViewById(R.id.rowGuideHead), findViewById(R.id.boxGuide),
                 (TextView) findViewById(R.id.tvGuideToggle),
@@ -167,6 +172,9 @@ public class MainActivity extends Activity {
         Fold.bind(findViewById(R.id.rowBackupHead), findViewById(R.id.boxBackup),
                 (TextView) findViewById(R.id.tvBackupToggle),
                 findViewById(R.id.tvBackupHint));
+        Fold.bind(findViewById(R.id.rowAboutHead), findViewById(R.id.boxAbout),
+                (TextView) findViewById(R.id.tvAboutToggle),
+                findViewById(R.id.tvAboutHint));
     }
 
     private void selectTab(boolean organize) {
@@ -224,7 +232,8 @@ public class MainActivity extends Activity {
         }
     }
 
-    private boolean installed(String target) {        try {
+    private boolean installed(String target) {
+        try {
             getPackageManager().getPackageInfo(target, 0);
             return true;
         } catch (PackageManager.NameNotFoundException ignored) {

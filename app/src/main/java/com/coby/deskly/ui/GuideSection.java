@@ -33,6 +33,9 @@ import com.coby.deskly.probe.TargetRegistry;
  * <p><b>0.12.1 起序号不再变绿勾。</b>整列步骤编号始终是数字，只有真出错（root 没授权）
  * 才显示 "!"。理由和上面那条一样：作用域那一步永远查不到，如果其余步骤都打勾，
  * 这一格空着就会被读成"这步有问题"，而实际上它只是无从验证。
+ *
+ * <p><b>0.12.3 起收起时的摘要也不再报"就绪 N"。</b>五步里有两步本来就无法自动确认，
+ * 算出来的分子分母都不成立；摘要只留 root 这一个能准确读出、且真的卡住可用性的判断。
  */
 public final class GuideSection {
 
@@ -47,9 +50,6 @@ public final class GuideSection {
     private final TextView tvFacts;
     private final TextView tvHint;
     private final Button btnRecheck;
-    /** 本轮渲染里已经就绪 / 需要处理的步数，收起时的摘要行用它。 */
-    private int okCount;
-    private int warnCount;
     /** 「重新检测」实际由备份区块的探测驱动：同一个 root 探测只该跑一次。 */
     private final Runnable onRecheck;
 
@@ -113,8 +113,6 @@ public final class GuideSection {
             return;
         }
         stepsBox.removeAllViews();
-        okCount = 0;
-        warnCount = 0;
 
         boolean lspMgr = installed(LSPOSED_PKG);
         boolean lspOn = lspMgr || Boolean.TRUE.equals(lspModule);
@@ -182,25 +180,25 @@ public final class GuideSection {
     }
 
     /**
-     * 收起时的摘要行：这张卡现在到底什么状态，不展开也能看出来。
+     * 收起时的摘要行：不展开也知道这张卡值不值得点开。
      *
-     * <p>只报事实、不打勾——步骤编号在正文里始终是数字，"已完成"靠这行数字体现，
-     * 不给每个步骤再挂一个绿色对勾：那会让人以为"打过勾 = 不用管了"，
-     * 而第 2 步（作用域）永远查不到，永远不可能打勾。
+     * <p><b>这里刻意不报"就绪 N/5"。</b>五步里第 2 步（作用域）框架根本查不到，
+     * 第 4 步（重启桌面）也不是可查询的状态，能算出来的"就绪数"永远不是 5——
+     * 分母假的、分子也不全，读起来像"你还有 2 步没做"，实际上那两步根本没法自动确认。
+     * 所以只留一个真正影响可用性的判断：root 到手了没有——它是唯一会让整理彻底不可用的一步，
+     * 也是唯一能准确读出来的。
      */
     private void updateHint() {
         if (tvHint == null) {
             return;
         }
         if (probe == null) {
-            tvHint.setText("5 步 · 正在检测 root…");
-            return;
+            tvHint.setText("5 步接入 · 正在检测 root…");
+        } else if (probe.ok()) {
+            tvHint.setText("5 步接入 · root 已就绪");
+        } else {
+            tvHint.setText("5 步接入 · root 未授权，展开看怎么拿");
         }
-        StringBuilder sb = new StringBuilder("5 步 · 就绪 ").append(okCount);
-        if (warnCount > 0) {
-            sb.append(" · 待处理 ").append(warnCount);
-        }
-        tvHint.setText(sb.toString());
     }
 
     /** 一行步骤：编号圆点 + 标题与说明 + 右侧动作。 */
@@ -222,11 +220,6 @@ public final class GuideSection {
         // 序号就是序号：就绪也照样显示数字，只有真出问题时才换成 "!"。
         // 以前 OK 会变成绿色 ✓，看起来像"这一步已经过验证"，可第 2 步（作用域）永远查不到，
         // 于是同一列里一半打勾一半不打，反而让不打勾的那半步看起来像出了问题。
-        if (state == State.OK) {
-            okCount++;
-        } else if (state == State.WARN) {
-            warnCount++;
-        }
         if (state == State.WARN) {
             dot.setText("!");
             dot.setTextColor(act.getColor(R.color.warn));
