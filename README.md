@@ -6,7 +6,7 @@
 
 按颜色 / 按功能一键重排全部图标 · 备份精确到每一个图标 · LSPosed 模块
 
-[![Release](https://img.shields.io/badge/release-0.14.0-4F46E5)](https://github.com/Cobylinweiqi/Deskly/releases/latest)
+[![Release](https://img.shields.io/badge/release-0.14.1-4F46E5)](https://github.com/Cobylinweiqi/Deskly/releases/latest)
 [![Stars](https://img.shields.io/github/stars/Cobylinweiqi/Deskly?label=stars&color=4F46E5)](https://github.com/Cobylinweiqi/Deskly/stargazers)
 [![Android](https://img.shields.io/badge/Android-8.0%2B-3DDC84?logo=android&logoColor=white)](#环境要求)
 [![LSPosed](https://img.shields.io/badge/LSPosed-API%20101-7F5AF0)](https://github.com/LSPosed/LSPosed)
