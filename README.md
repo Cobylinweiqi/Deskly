@@ -20,6 +20,15 @@
 
 </div>
 
+> ### ⚠️ 未经本人同意，请勿擅自转载、打包、二次分发
+>
+> 本项目采用**保留所有权利（All Rights Reserved）**的专有许可，**不是开源许可证**。
+> 你可以免费下载、编译、在自己的设备上使用，也欢迎**分享本仓库链接**；
+> 但**转载、复制、镜像、重新打包 APK、搬运到第三方应用市场 / 网盘 / 论坛附件 / 公众号 /
+> 群文件，或收入任何「合集」「工具箱」「刷机包」**，都必须先取得作者的书面许可。
+>
+> 完整条款见 [LICENSE](LICENSE)；需要授权请走 [Issues](https://github.com/Cobylinweiqi/Deskly/issues)。
+
 ---
 
 ## 它解决什么问题
@@ -174,13 +183,18 @@ echo "sdk.dir=/path/to/Android/sdk" > local.properties
 
 **Copyright © 2026 Coby Lin. All rights reserved.**
 
+本项目采用**保留所有权利（All Rights Reserved）**的专有许可，**不是开源许可证**——不属于 MIT / Apache / GPL 等任何 OSI 认可的开源协议，不授予再分发权。完整条款见 [LICENSE](LICENSE)。
+
 - ✅ 欢迎**分享本仓库链接**，让更多人看到；
 - ✅ 欢迎在个人博客 / 视频 / 文章里**引用本项目的名称、截图与功能介绍**，并注明出处与本仓库地址；
+- ✅ 从**作者本人维护的渠道**获取与升级不受限制：[主仓库 Releases](https://github.com/Cobylinweiqi/Deskly/releases)、[LSPosed 官方模块库索引仓库](https://github.com/Xposed-Modules-Repo/io.github.cobylinweiqi.deskly)；
 - ❌ **未经作者书面授权，禁止任何形式的转载与二次分发**，包括但不限于：把 APK 重新打包、搬运到第三方应用市场 / 网盘 / 公众号 / 论坛附件、去除署名后发布、打包进「XX 合集」「XX 工具箱」；
+- ❌ **禁止把本项目整体或部分重新提交到任何模块仓库 / 应用市场**，冒充原作者或由第三方自行发布；
+- ❌ **禁止反编译后重新签名打包**，或以「汉化版」「优化版」「增强版」「搬运版」等名义发布修改版；
 - ❌ **禁止任何商业用途**（含付费下载、以捐赠/会员/广告等形式变相收费、随硬件或服务捆绑分发）；
 - ❌ 禁止移除或修改本项目的署名、版权信息与免责声明。
 
-需要授权（转载、商用、二次开发分发）请先通过 [Issues](https://github.com/Cobylinweiqi/Deskly/issues) 联系作者，说明用途与范围，取得**书面许可**后再进行。
+需要授权（转载、商用、二次开发分发）请先通过 [Issues](https://github.com/Cobylinweiqi/Deskly/issues) 联系作者，说明用途与范围，取得**书面许可**后再进行。作者未回复不等于默许。
 
 ---
 
