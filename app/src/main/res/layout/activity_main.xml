@@ -311,6 +311,36 @@
                             android:textColor="@color/text_primary"
                             android:textSize="13sp" />
 
+                        <!-- 锁定屏：这几屏的图标不参与整理，屏号按锁定顺序压缩 -->
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="10dp"
+                            android:text="锁定屏（点选后这几屏的图标保持不动）"
+                            android:textColor="@color/text_secondary"
+                            android:textSize="12sp" />
+
+                        <LinearLayout
+                            android:id="@+id/lockContainer"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:orientation="vertical" />
+
+                        <CheckBox
+                            android:id="@+id/cbKeepWidgets"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:buttonTint="@color/accent"
+                            android:minHeight="40dp"
+                            android:paddingStart="0dp"
+                            android:paddingTop="4dp"
+                            android:paddingEnd="0dp"
+                            android:paddingBottom="4dp"
+                            android:text="锁定屏以外的小组件保留到最后一屏"
+                            android:textColor="@color/text_primary"
+                            android:textSize="13sp" />
+
                         <TextView
                             android:id="@+id/tvPlanSummary"
                             style="@style/CardBody"

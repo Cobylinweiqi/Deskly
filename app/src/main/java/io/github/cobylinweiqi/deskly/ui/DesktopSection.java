@@ -206,6 +206,8 @@ public final class DesktopSection {
                     return;
                 }
                 model = fModel;
+                // 屏数变了，锁定 Chip 与越界的锁定记录要一起收敛
+                plan.setScreenCount(fModel.screenCount);
                 renderOverview(fModel, fInstalled, fMissing);
                 rebuild();
             });
@@ -249,8 +251,27 @@ public final class DesktopSection {
         cardStats.setVisibility(View.VISIBLE);
 
         int hotseat = m.hotseat.size();
+        Set<Integer> locks = plan.lockedScreens();
+        int lockedApps = 0;
+        for (DesktopModel.Folder f : m.folders) {
+            if (locks.contains(f.screen)) {
+                for (DesktopModel.Item i : f.members) {
+                    if (i.isApp()) {
+                        lockedApps++;
+                    }
+                }
+            }
+        }
+        for (DesktopModel.Item i : m.looseOnDesktop) {
+            if (locks.contains(i.screen) && i.isApp()) {
+                lockedApps++;
+            }
+        }
+        String lockNote = locks.isEmpty() ? ""
+                : " · 锁定 " + locks.size() + " 屏（跳过 " + lockedApps + " 个图标）";
         tvStatus.setText("桌面已读取：其中 " + countLoose(m) + " 个散在桌面上、"
-                + hotseat + " 个在底部固定栏（不动）。下面两个方案都算好了，选中即预览。");
+                + hotseat + " 个在底部固定栏（不动）" + lockNote
+                + "。下面两个方案都算好了，选中即预览。");
 
         if (missing > 0) {
             tvNote.setText("本机 " + installed + " 个可启动应用里有 " + missing
@@ -284,6 +305,8 @@ public final class DesktopSection {
         final AppClassifier.Scheme scheme = plan.scheme();
         final boolean blank = plan.firstScreenBlank();
         final Map<String, Integer> pins = new LinkedHashMap<>(plan.pins());
+        final java.util.Set<Integer> locks = new java.util.HashSet<>(plan.lockedScreens());
+        final boolean keepWidgets = plan.keepOrphanWidgets();
         final DesktopModel m = model;
 
         busy = true;
@@ -295,7 +318,7 @@ public final class DesktopSection {
             String err = null;
             Map<AppClassifier.Scheme, Integer> counts = new EnumMap<>(AppClassifier.Scheme.class);
             try {
-                p = DeskPlan.build(act, m, scheme, blank, pins);
+                p = DeskPlan.build(act, m, scheme, blank, pins, locks, keepWidgets);
                 // 两个方案的组数一起算：方案卡上要能直接比较，切过去才知道差几个文件夹太迟了
                 for (AppClassifier.Scheme s : AppClassifier.Scheme.values()) {
                     counts.put(s, countGroups(m, s));
@@ -339,7 +362,12 @@ public final class DesktopSection {
      */
     private int countGroups(DesktopModel m, AppClassifier.Scheme scheme) {
         Set<String> groups = new HashSet<>();
+        Set<Integer> locks = plan.lockedScreens();
         for (DesktopModel.Folder f : m.folders) {
+            // 锁定屏里的图标不参与整理，数组时也不能算进来
+            if (locks.contains(f.screen)) {
+                continue;
+            }
             for (DesktopModel.Item i : f.members) {
                 if (i.isApp()) {
                     groups.add(groupOf(i, scheme));
@@ -347,6 +375,9 @@ public final class DesktopSection {
             }
         }
         for (DesktopModel.Item i : m.looseOnDesktop) {
+            if (locks.contains(i.screen)) {
+                continue;
+            }
             if (i.isApp()) {
                 groups.add(groupOf(i, scheme));
             }
@@ -406,14 +437,17 @@ public final class DesktopSection {
         cardGroups.setVisibility(View.VISIBLE);
 
         if (p.buckets.isEmpty()) {
-            tvSummary.setText("桌面上没有可整理的应用图标");
+            tvSummary.setText(p.lockedCount > 0
+                    ? "锁定屏之外的屏里没有可整理的图标"
+                    : "桌面上没有可整理的应用图标");
             applyBar.setVisibility(View.GONE);
             groupBox.addView(note("读到的都是小组件或组件，它们不进文件夹。"));
             return;
         }
 
         tvSummary.setText("整理后 " + p.buckets.size() + " 个文件夹 · 共 " + p.screenCount
-                + " 屏 · 每屏最多 " + LayoutPlan.FOLDERS_PER_SCREEN + " 个");
+                + " 屏" + (p.lockedCount > 0 ? "（锁定 " + p.lockedCount + " 屏）" : "")
+                + " · 每屏最多 " + LayoutPlan.FOLDERS_PER_SCREEN + " 个");
         for (DeskPlan.Bucket b : p.buckets) {
             groupBox.addView(buildBucket(b));
         }
@@ -586,6 +620,10 @@ public final class DesktopSection {
             if (i == 1 && plan.firstScreenBlank()) {
                 continue;
             }
+            // 锁定屏不放新文件夹，钉上去也不会生效
+            if (plan.isLocked(i)) {
+                continue;
+            }
             items.add("第 " + i + " 屏");
         }
         int checked = 0;
@@ -623,8 +661,10 @@ public final class DesktopSection {
             sb.append("· ").append(b.group).append(" ").append(b.size())
                     .append(" 个 → 第 ").append(b.screen).append(" 屏\n");
         }
-        sb.append("\n这会改动整张桌面（").append(desk.total).append(" 个图标）。")
-                .append("动手前会自动拍一张「整理前」快照，随时能退回去。");
+        sb.append("\n这会改动整张桌面（").append(desk.total).append(" 个图标")
+                .append(desk.lockedCount > 0
+                        ? "，跳过锁定的 " + desk.lockedCount + " 屏" : "")
+                .append("）。动手前会自动拍一张「整理前」快照，随时能退回去。");
 
         new AlertDialog.Builder(act)
                 .setTitle("整理 " + desk.total + " 个图标？")
@@ -647,6 +687,8 @@ public final class DesktopSection {
         final AppClassifier.Scheme scheme = plan.scheme();
         final boolean blank = plan.firstScreenBlank();
         final Map<String, Integer> pins = new LinkedHashMap<>(plan.pins());
+        final java.util.Set<Integer> locks = new java.util.HashSet<>(plan.lockedScreens());
+        final boolean keepWidgets = plan.keepOrphanWidgets();
 
         new Thread(() -> {
             String err = null;
@@ -659,7 +701,7 @@ public final class DesktopSection {
                     err = "读取最新布局失败，已中止（桌面未被改动）";
                 } else {
                     DesktopModel fresh = DesktopModel.read(copy, act, pkg);
-                    DeskPlan p = DeskPlan.build(act, fresh, scheme, blank, pins);
+                    DeskPlan p = DeskPlan.build(act, fresh, scheme, blank, pins, locks, keepWidgets);
                     if (p.buckets.isEmpty()) {
                         err = "桌面上没有可整理的应用图标";
                     } else {

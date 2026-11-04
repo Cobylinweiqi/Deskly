@@ -95,29 +95,50 @@ public final class LayoutPlan {
     public final List<Screen> screens = new ArrayList<>();
     public int folderCount;
 
+    /**
+     * 锁定屏数量。这些屏按用户原样保留，不放进 {@link #screens}（它们不参与排布），
+     * 但占掉前面的屏号：新文件夹从 {@code lockedCount + 1} 屏开始。
+     */
+    public int lockedCount;
+
+    /** 新文件夹的起始屏号（1 起）。锁定 + 留空共同决定，预览与写入都以它为准。 */
+    public int startScreen = 1;
+
     private LayoutPlan() {
     }
 
     public static LayoutPlan build(Map<String, List<AppEntry>> groups, boolean firstScreenBlank) {
-        return build(groups, firstScreenBlank, null, null);
+        return build(groups, firstScreenBlank, null, null, 0);
     }
 
     public static LayoutPlan build(Map<String, List<AppEntry>> groups, boolean firstScreenBlank,
                                    Map<String, Integer> pins) {
-        return build(groups, firstScreenBlank, pins, null);
+        return build(groups, firstScreenBlank, pins, null, 0);
+    }
+
+    public static LayoutPlan build(Map<String, List<AppEntry>> groups, boolean firstScreenBlank,
+                                   Map<String, Integer> pins, Map<Integer, int[]> slotsOf) {
+        return build(groups, firstScreenBlank, pins, slotsOf, 0);
     }
 
     /**
      * @param pins 组名 → 指定屏号，可为 null。指定的组优先占位，其余按原顺序填进剩下的空格；
      *             存在钉屏时不会把两组塞进同一个格。第一屏留空时，钉在 1 屏的会被当成"自动"——
      *             否则勾选框和分组设置会互相打架，用户看到的屏号跟勾选状态矛盾。
+     *             锁定屏占掉的号不能钉：钉到锁定屏上等于往别人的屏里塞文件夹。
      * @param slotsOf 屏号 → 这一屏还能用的候选位，可为 null（都按 6 个全用）。
      *                桌面上的小组件会整块占住格子：真机第 1 屏有个 4×2 的日历，
      *                压掉 (0,0) 和 (2,0) 两位。只减数量不减具体位置，写进去必然重叠。
+     * @param lockedCount 锁定屏数量。锁定屏按升序占 1..lockedCount，新文件夹从它之后开始；
+     *                    与「第一屏留空」冲突时以锁定为准（第 1 屏已经归用户了）。
      */
     public static LayoutPlan build(Map<String, List<AppEntry>> groups, boolean firstScreenBlank,
-                                   Map<String, Integer> pins, Map<Integer, int[]> slotsOf) {
+                                   Map<String, Integer> pins, Map<Integer, int[]> slotsOf,
+                                   int lockedCount) {
         LayoutPlan plan = new LayoutPlan();
+        plan.lockedCount = Math.max(0, lockedCount);
+        plan.startScreen = Math.max(firstScreenBlank ? 2 : 1, plan.lockedCount + 1);
+
         TreeMap<Integer, Screen> byNumber = new TreeMap<>();
         List<Folder> auto = new ArrayList<>();
 
@@ -128,7 +149,8 @@ public final class LayoutPlan {
             }
             Folder f = new Folder(e.getKey(), list.size());
             Integer pin = pins == null ? null : pins.get(e.getKey());
-            boolean usable = pin != null && pin > 0 && !(firstScreenBlank && pin == 1);
+            boolean usable = pin != null && pin > plan.lockedCount
+                    && !(firstScreenBlank && pin == 1);
             if (usable) {
                 screenAt(byNumber, pin, slotsOf).folders.add(f);
             } else {
@@ -138,15 +160,15 @@ public final class LayoutPlan {
         }
 
         // 自动的组从起始屏往后填，遇到已有组的屏先补空位再换屏
-        int start = firstScreenBlank ? 2 : 1;
-        int cursor = start;
+        int cursor = plan.startScreen;
         for (Folder f : auto) {
             Screen s = nextWithRoom(byNumber, cursor, slotsOf);
             s.folders.add(f);
             cursor = s.number;
         }
 
-        if (firstScreenBlank && !byNumber.containsKey(1)) {
+        // 锁定第 1 屏时，第 1 屏已经是用户自己的内容，不再插一个"留空"占位屏
+        if (plan.lockedCount == 0 && firstScreenBlank && !byNumber.containsKey(1)) {
             byNumber.put(1, new Screen(1, true));
         }
         spillOverflow(byNumber, slotsOf);
@@ -239,13 +261,16 @@ public final class LayoutPlan {
         return screens.isEmpty() ? 0 : screens.get(screens.size() - 1).number;
     }
 
-    /** 一行摘要，如「共 2 屏 · 9 个文件夹 · 每屏 6 个」。 */
+    /** 一行摘要，如「共 2 屏 · 9 个文件夹 · 每屏 6 个」。锁定屏算在总屏数里。 */
     public String summary() {
         if (folderCount == 0) {
             return "没有可排布的分组";
         }
         String gap = gapNote();
-        return "共 " + screens.size() + " 屏 · " + folderCount + " 个文件夹 · 每屏 "
+        int total = lockedCount + screens.size();
+        return "共 " + total + " 屏"
+                + (lockedCount > 0 ? "（锁定 " + lockedCount + " 屏）" : "")
+                + " · " + folderCount + " 个文件夹 · 每屏 "
                 + FOLDERS_PER_SCREEN + " 个（" + COLUMNS + "×" + ROWS + " 网格，文件夹占 "
                 + FOLDER_SPAN + "×" + FOLDER_SPAN + "）"
                 + (gap.isEmpty() ? "" : " · " + gap);
@@ -262,7 +287,8 @@ public final class LayoutPlan {
         }
         StringBuilder sb = new StringBuilder();
         int max = screens.get(screens.size() - 1).number;
-        for (int i = 1; i <= max; i++) {
+        // 锁定屏占 1..lockedCount，不参与"空屏"判断
+        for (int i = lockedCount + 1; i <= max; i++) {
             if (has.contains(i)) {
                 continue;
             }

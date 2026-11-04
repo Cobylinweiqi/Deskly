@@ -293,10 +293,25 @@ public final class DeskWriter {
                     r.folderCount++;
                 }
 
-                // 没被复用的旧文件夹删掉；被保护的不碰
+                // 锁定屏内容与保留的小组件：只改 screen，其他一律不动。
+                // 必须在删旧文件夹之前做——锁定屏里的文件夹本体也在这张表里。
+                for (Map.Entry<Integer, Integer> e : plan.frozenScreens.entrySet()) {
+                    ContentValues v = new ContentValues();
+                    v.put("screen", e.getValue());
+                    db.update("favorites", v, "_id=?",
+                            new String[]{String.valueOf(e.getKey())});
+                }
+
+                // 选择"随屏清空"的小组件：从这里删掉
+                for (int id : plan.dropIds) {
+                    db.delete("favorites", "_id=?", new String[]{String.valueOf(id)});
+                }
+
+                // 没被复用的旧文件夹删掉；被保护的不碰；锁定屏里的永远不删
                 int removed = 0;
                 for (int id : oldIds) {
-                    if (kept.contains(id) || protectedFolders.contains(id)) {
+                    if (kept.contains(id) || protectedFolders.contains(id)
+                            || plan.keptFolderIds.contains(id)) {
                         continue;
                     }
                     removed += db.delete("favorites", "_id=?", new String[]{String.valueOf(id)});

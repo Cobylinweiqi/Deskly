@@ -7,9 +7,12 @@ import android.graphics.drawable.Drawable;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * 「整理全部图标」的落地方案：把所有应用图标按当前预设重新分组，并算出每个文件夹
@@ -74,6 +77,37 @@ public final class DeskPlan {
     /** 当前桌面已有的文件夹数量，用于在回执里说清"18 个旧文件夹 → 9 个新文件夹"。 */
     public int oldFolderCount;
 
+    // ───────────────────────── 锁定屏（0.14） ─────────────────────────
+
+    /** 被锁定的原屏号（升序，只含当前桌面真实存在的）。 */
+    public final List<Integer> lockedScreens = new ArrayList<>();
+
+    /**
+     * 需要只改 screen 的条目：itemId → 新屏号。
+     *
+     * <p>锁定屏里的文件夹本体、应用、组件都走这张表——它们的内容、格位一律不动，
+     * 只因为中间未锁定的屏被清空而整体前移。被保留的未锁定屏小组件也复用这张表。
+     */
+    public final Map<Integer, Integer> frozenScreens = new LinkedHashMap<>();
+
+    /** 未锁定屏上的小组件：原屏会被重排掉，必须显式安置（保留则挪到最后一屏）。 */
+    public final List<DesktopModel.Item> orphanWidgets = new ArrayList<>();
+
+    /** 选择"随屏清空"时，这些小组件要从库里删掉。 */
+    public final Set<Integer> dropIds = new LinkedHashSet<>();
+
+    /** 锁定屏上原地保留的文件夹 id，写入时绝不能删。 */
+    public final Set<Integer> keptFolderIds = new HashSet<>();
+
+    /** 未锁定屏的小组件是否保留（true=挪到最后一屏，false=删除）。 */
+    public boolean keepOrphanWidgets = true;
+
+    /** 锁定屏数量。新文件夹从 {@code lockedCount + 1} 屏开始。 */
+    public int lockedCount;
+
+    /** 新文件夹的起始屏号（与 LayoutPlan 保持一致，用于回执与预览）。 */
+    public int startScreen = 1;
+
     public int memberCount() {
         int n = 0;
         for (Bucket b : buckets) {
@@ -88,14 +122,49 @@ public final class DeskPlan {
      */
     public static DeskPlan build(Context ctx, DesktopModel model, AppClassifier.Scheme scheme,
                                  boolean firstScreenBlank, Map<String, Integer> pins) {
+        return build(ctx, model, scheme, firstScreenBlank, pins, null, true);
+    }
+
+    /**
+     * @param lockedScreens 锁定的<b>原屏号</b>，可为 null。这些屏内的应用、文件夹、组件
+     *                      全部冻结，不参与分组；屏号按锁定顺序压缩成 1..k。
+     * @param keepOrphanWidgets 未锁定屏上的小组件：true=挪到最后一屏保留，false=随屏清空。
+     */
+    public static DeskPlan build(Context ctx, DesktopModel model, AppClassifier.Scheme scheme,
+                                 boolean firstScreenBlank, Map<String, Integer> pins,
+                                 Set<Integer> lockedScreens, boolean keepOrphanWidgets) {
         DeskPlan plan = new DeskPlan();
         plan.oldFolderCount = model.folders.size();
+        plan.keepOrphanWidgets = keepOrphanWidgets;
+
+        // 1) 锁定屏：只认当前桌面真实存在的屏号；升序后映射到新号 1..k。
+        List<Integer> locks = new ArrayList<>();
+        if (lockedScreens != null) {
+            for (int s : lockedScreens) {
+                if (s >= 1 && s <= model.screenCount && !locks.contains(s)) {
+                    locks.add(s);
+                }
+            }
+        }
+        Collections.sort(locks);
+        Map<Integer, Integer> remap = new LinkedHashMap<>();
+        for (int i = 0; i < locks.size(); i++) {
+            remap.put(locks.get(i), i + 1);
+        }
+        plan.lockedScreens.addAll(locks);
+        plan.lockedCount = locks.size();
+        plan.startScreen = Math.max(firstScreenBlank ? 2 : 1, plan.lockedCount + 1);
+        boolean hasLock = !locks.isEmpty();
         // 现有文件夹的名字能对上新组名的，复用它的 _id。
         //
         // 但标题是资源引用的（com.miui.home:string/app_category_games 这种）一律不复用：
         // 那是小米「自动分类」生成的文件夹，什么时候重排内容由系统说了算——把用户整理进去的
         // 图标交给它保管，等于让这次整理随时可能被悄悄回滚。宁可删掉重建一个同名普通文件夹。
         for (DesktopModel.Folder f : model.folders) {
+            // 锁定屏里的文件夹不参与复用：它的 id 要留着托住原来的内容
+            if (remap.containsKey(f.screen)) {
+                continue;
+            }
             if (f.title == null || f.title.isEmpty()) {
                 continue;
             }
@@ -118,10 +187,16 @@ public final class DeskPlan {
             }
         }
 
-        // 1) 收集要整理的应用：文件夹内的成员 + 桌面散落的应用/快捷方式。
+        // 3) 收集要整理的应用：只收未锁定屏的；锁定屏整块冻结。
         //    热区不看——它天然是刻意放的；组件也不能进文件夹。
         List<DesktopModel.Item> apps = new ArrayList<>();
         for (DesktopModel.Folder f : model.folders) {
+            if (remap.containsKey(f.screen)) {
+                // 整个文件夹（连成员）原地保留，只把屏号前移
+                plan.frozenScreens.put(f.id, remap.get(f.screen));
+                plan.keptFolderIds.add(f.id);
+                continue;
+            }
             for (DesktopModel.Item m : f.members) {
                 if (m.isApp()) {
                     apps.add(m);
@@ -131,6 +206,11 @@ public final class DeskPlan {
             }
         }
         for (DesktopModel.Item i : model.looseOnDesktop) {
+            if (remap.containsKey(i.screen)) {
+                // 锁定屏上的应用/快捷方式/组件都冻结，只改屏号
+                plan.frozenScreens.put(i.id, remap.get(i.screen));
+                continue;
+            }
             if (i.isApp()) {
                 apps.add(i);
             } else if (!i.isFolder()) {
@@ -145,11 +225,20 @@ public final class DeskPlan {
                 // 真机复现：整理前第 2 屏的 4 个文件夹占着候选位 2~5，于是第 2 屏
                 // "只剩"0、1 两个位，只能放 2 个文件夹；第 4 屏的文件夹占 0~2，
                 // 新文件夹就被排到 3、4、5——用户看到的就是"我钉的屏它不认"。
-                plan.stayPut.add(i);
+                //
+                // 普通组件：没有锁定时按老行为留在原屏并扣格位；有锁定时它所在的屏
+                // 会被重排掉，必须显式安置，否则会和压缩后的锁定屏抢同一个屏号。
+                if (hasLock) {
+                    plan.orphanWidgets.add(i);
+                } else {
+                    plan.stayPut.add(i);
+                }
             }
         }
         plan.total = apps.size();
         if (apps.isEmpty()) {
+            // 没有可整理的图标：锁定屏照样压缩屏号，小组件按策略安置
+            plan.screenCount = settle(plan, plan.lockedCount);
             return plan;
         }
 
@@ -189,7 +278,8 @@ public final class DeskPlan {
             }
             forPlan.put(e.getKey(), fake);
         }
-        LayoutPlan layout = LayoutPlan.build(forPlan, firstScreenBlank, pins, plan.slots);
+        LayoutPlan layout = LayoutPlan.build(
+                forPlan, firstScreenBlank, pins, plan.slots, plan.lockedCount);
 
         // 4) 屏幕内序号 → 2×2 格位。每屏 6 个文件夹，按 2 列 3 行铺。
         Map<String, Bucket> byGroup = new LinkedHashMap<>();
@@ -227,8 +317,35 @@ public final class DeskPlan {
                 maxScreen = b.screen;
             }
         }
-        plan.screenCount = maxScreen;
+        plan.screenCount = settle(plan, maxScreen);
         return plan;
+    }
+
+    /**
+     * 收尾：安置未锁定屏上的小组件，算出最终屏数。
+     *
+     * <p>保留时把它们整体挪到最后一屏之后（保持各自 cellX/cellY，只要原来不重叠，
+     * 挪过去也不重叠）；清空时记进 {@link #dropIds} 交给写入层删除。
+     *
+     * @param maxScreen 新文件夹占到的最大屏号
+     * @return 整理后的总屏数
+     */
+    private static int settle(DeskPlan plan, int maxScreen) {
+        int total = Math.max(maxScreen, plan.lockedCount);
+        if (plan.orphanWidgets.isEmpty()) {
+            return total;
+        }
+        if (plan.keepOrphanWidgets) {
+            int orphanScreen = total + 1;
+            for (DesktopModel.Item w : plan.orphanWidgets) {
+                plan.frozenScreens.put(w.id, orphanScreen);
+            }
+            return orphanScreen;
+        }
+        for (DesktopModel.Item w : plan.orphanWidgets) {
+            plan.dropIds.add(w.id);
+        }
+        return total;
     }
 
     // ───────────────────────── 分组 ─────────────────────────

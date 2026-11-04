@@ -40,8 +40,13 @@ public final class PlanSection {
     private final CheckBox cbFirstBlank;
     private final TextView tvPlanSummary;
     private final LinearLayout screenBox;
+    /** 锁定屏的 Chip 容器。 */
+    private final LinearLayout lockBox;
+    private final CheckBox cbKeepWidgets;
 
     private final PlanConfig cfg;
+    /** 当前桌面屏数，0 表示还没分析。锁定 Chip 按它生成。 */
+    private int screenCount;
     private final Map<Scheme, Row> rows = new EnumMap<>(Scheme.class);
     private final Map<Scheme, Integer> groupCounts = new EnumMap<>(Scheme.class);
 
@@ -63,12 +68,15 @@ public final class PlanSection {
     }
 
     public PlanSection(Activity act, LinearLayout presetBox, CheckBox cbFirstBlank,
-                       TextView tvPlanSummary, LinearLayout screenBox) {
+                       TextView tvPlanSummary, LinearLayout screenBox,
+                       LinearLayout lockBox, CheckBox cbKeepWidgets) {
         this.act = act;
         this.presetBox = presetBox;
         this.cbFirstBlank = cbFirstBlank;
         this.tvPlanSummary = tvPlanSummary;
         this.screenBox = screenBox;
+        this.lockBox = lockBox;
+        this.cbKeepWidgets = cbKeepWidgets;
         this.cfg = PlanConfig.load(act);
 
         buildPresets();
@@ -81,6 +89,9 @@ public final class PlanSection {
             // 显示"已钉"却和实际位置不符，索性一并清掉
             if (checked) {
                 cfg.pins.values().removeIf(n -> n != null && n == 1);
+                // 第 1 屏留空与锁定第 1 屏互斥：锁着的屏不可能同时"留空"
+                cfg.setLocked(1, false);
+                paintLocks();
             }
             cfg.save(act);
             // 自己重绘：勾选只影响排布，不动分类结果，没必要让上层重新分组
@@ -89,6 +100,16 @@ public final class PlanSection {
                 planChanged.run();
             }
         });
+
+        cbKeepWidgets.setChecked(cfg.keepOrphanWidgets);
+        cbKeepWidgets.setOnCheckedChangeListener((btn, checked) -> {
+            cfg.keepOrphanWidgets = checked;
+            cfg.save(act);
+            if (planChanged != null) {
+                planChanged.run();
+            }
+        });
+        paintLocks();
 
         updatePresets();
     }
@@ -108,6 +129,99 @@ public final class PlanSection {
     /** 第一屏是否留空。选屏号的对话框要据此把"第 1 屏"从选项里去掉。 */
     public boolean firstScreenBlank() {
         return cfg.firstScreenBlank;
+    }
+
+    // ───────────────────────── 锁定屏 ─────────────────────────
+
+    /**
+     * 分析完把桌面屏数告诉这里，锁定 Chip 才有得画。
+     *
+     * <p>同时清掉越界的锁定记录：整理后屏数会变少，留着一个"第 5 屏"的锁定，
+     * 下次会把不存在的屏当成锁定屏，新文件夹的起始屏被无端推后。
+     */
+    public void setScreenCount(int n) {
+        this.screenCount = Math.max(0, n);
+        cfg.retainLockedUpTo(screenCount);
+        cfg.save(act);
+        paintLocks();
+    }
+
+    public java.util.Set<Integer> lockedScreens() {
+        return cfg.lockedScreens;
+    }
+
+    public boolean keepOrphanWidgets() {
+        return cfg.keepOrphanWidgets;
+    }
+
+    public int lockedCount() {
+        return cfg.lockedCount();
+    }
+
+    /** 该屏是否被锁定。钉屏选项要据此把锁定屏排除，避免"钉了却不生效"。 */
+    public boolean isLocked(int screen) {
+        return cfg.isLocked(screen);
+    }
+
+    /** 可换行的一排屏号 Chip：点一下锁/解锁，立刻落盘并重算。 */
+    private void paintLocks() {
+        lockBox.removeAllViews();
+        if (screenCount <= 0) {
+            TextView hint = new TextView(act);
+            hint.setText("分析后可选");
+            hint.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
+            hint.setTextColor(act.getColor(R.color.text_tertiary));
+            lockBox.addView(hint);
+            return;
+        }
+        LinearLayout row = null;
+        for (int i = 1; i <= screenCount; i++) {
+            if ((i - 1) % 6 == 0) {
+                row = new LinearLayout(act);
+                row.setOrientation(LinearLayout.HORIZONTAL);
+                LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+                if (i > 1) {
+                    rp.topMargin = dp(6);
+                }
+                row.setLayoutParams(rp);
+                lockBox.addView(row);
+            }
+            row.addView(buildLockChip(i));
+        }
+    }
+
+    private View buildLockChip(final int screen) {
+        final boolean locked = cfg.isLocked(screen);
+        TextView chip = new TextView(act);
+        chip.setText(locked ? "第 " + screen + " 屏 · 锁" : "第 " + screen + " 屏");
+        chip.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
+        chip.setTypeface(null, locked
+                ? android.graphics.Typeface.BOLD : android.graphics.Typeface.NORMAL);
+        chip.setGravity(Gravity.CENTER);
+        chip.setPadding(dp(10), dp(5), dp(10), dp(5));
+        chip.setBackgroundResource(locked ? R.drawable.bg_pill_accent : R.drawable.bg_pill_idle);
+        chip.setTextColor(act.getColor(locked ? R.color.accent : R.color.text_secondary));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.rightMargin = dp(6);
+        lp.bottomMargin = dp(6);
+        chip.setLayoutParams(lp);
+        chip.setOnClickListener(v -> {
+            cfg.toggleLock(screen);
+            // 锁定第 1 屏与「第一屏留空」互斥：第 1 屏已经归用户自己了
+            if (screen == 1 && cfg.isLocked(1)) {
+                cfg.firstScreenBlank = false;
+                cbFirstBlank.setChecked(false);
+            }
+            cfg.save(act);
+            paintLocks();
+            paintPlan();
+            if (planChanged != null) {
+                planChanged.run();
+            }
+        });
+        return chip;
     }
 
     // ───────────────────────── 钉屏 ─────────────────────────
@@ -352,20 +466,76 @@ public final class PlanSection {
      */
     private void paintPlan() {
         if (lastGroups == null) {
-            tvPlanSummary.setText(cfg.firstScreenBlank
-                    ? "已记录：第一屏留空 · 分析后显示具体排布"
-                    : "分析后这里显示每个文件夹落在第几屏");
+            if (cfg.lockedCount() > 0) {
+                tvPlanSummary.setText("已锁定 " + cfg.lockedCount() + " 屏 · 分析后显示具体排布");
+            } else {
+                tvPlanSummary.setText(cfg.firstScreenBlank
+                        ? "已记录：第一屏留空 · 分析后显示具体排布"
+                        : "分析后这里显示每个文件夹落在第几屏");
+            }
             screenBox.removeAllViews();
             lastPlan = null;
             return;
         }
-        LayoutPlan plan = LayoutPlan.build(lastGroups, cfg.firstScreenBlank, cfg.pins, lastSlots);
+        LayoutPlan plan = LayoutPlan.build(lastGroups, cfg.firstScreenBlank, cfg.pins,
+                lastSlots, cfg.lockedCount());
         lastPlan = plan;
         tvPlanSummary.setText(plan.summary());
         screenBox.removeAllViews();
+
+        // 锁定屏先画：它们占 1..k，屏号会因为中间未锁定的屏被清空而前移
+        java.util.List<Integer> locks = cfg.sortedLocks();
+        for (int i = 0; i < locks.size(); i++) {
+            screenBox.addView(buildLockedRow(i + 1, locks.get(i)));
+        }
         for (LayoutPlan.Screen s : plan.screens) {
             screenBox.addView(buildScreenRow(plan, s));
         }
+    }
+
+    /** 锁定屏在预览里也占一行，让用户看清"原第 3 屏会变成新第 2 屏"。 */
+    private View buildLockedRow(int newNumber, int oldNumber) {
+        LinearLayout box = new LinearLayout(act);
+        box.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.topMargin = dp(8);
+        box.setLayoutParams(lp);
+        box.setBackgroundResource(R.drawable.bg_screen_reserved);
+        box.setPadding(dp(11), dp(9), dp(11), dp(9));
+
+        LinearLayout head = new LinearLayout(act);
+        head.setOrientation(LinearLayout.HORIZONTAL);
+        head.setGravity(Gravity.CENTER_VERTICAL);
+
+        TextView name = new TextView(act);
+        name.setText("第 " + newNumber + " 屏"
+                + (oldNumber != newNumber ? "（原第 " + oldNumber + " 屏）" : ""));
+        name.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
+        name.setTypeface(null, android.graphics.Typeface.BOLD);
+        name.setTextColor(act.getColor(R.color.accent));
+        name.setLayoutParams(new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        head.addView(name);
+
+        TextView tag = new TextView(act);
+        tag.setText("已锁定 · 不动");
+        tag.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
+        tag.setTextColor(act.getColor(R.color.accent));
+        head.addView(tag);
+        box.addView(head);
+
+        TextView body = new TextView(act);
+        body.setText("这一屏的图标原样保留，新文件夹从第 "
+                + (cfg.lockedCount() + 1) + " 屏开始");
+        body.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
+        body.setTextColor(act.getColor(R.color.text_secondary));
+        LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        bp.topMargin = dp(4);
+        body.setLayoutParams(bp);
+        box.addView(body);
+        return box;
     }
 
     private View buildScreenRow(LayoutPlan plan, LayoutPlan.Screen s) {

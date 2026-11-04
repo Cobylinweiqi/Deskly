@@ -86,7 +86,9 @@ public class MainActivity extends Activity {
                 findViewById(R.id.presetContainer),
                 findViewById(R.id.cbFirstBlank),
                 findViewById(R.id.tvPlanSummary),
-                findViewById(R.id.screenContainer));
+                findViewById(R.id.screenContainer),
+                findViewById(R.id.lockContainer),
+                findViewById(R.id.cbKeepWidgets));
 
         desktop = new DesktopSection(this, DEFAULT_TARGET, pageOrganize, plan);
 
