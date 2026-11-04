@@ -100,8 +100,11 @@ public final class Shell {
                 case OK:
                     return "";
                 case DENIED:
-                    return "打开 Magisk → 超级用户，把 Deskly 设为允许；"
-                            + "或退回桌面重新打开本应用，会再弹一次授权框。\n"
+                    return "到「超级用户列表」里手动授权：\n"
+                            + "打开 Magisk → 底部「超级用户」→ 找到 Deskly，打开右侧开关。\n"
+                            + "（KernelSU / APatch 同理，在「超级用户」页里授权。）\n"
+                            + "列表里如果暂时没有 Deskly，说明它还没成功发起过 su 请求——"
+                            + "回到本页点「重试」，触发一次申请后它就会出现在列表里。\n"
                             + "授权后无需手动刷新，回到本页会自动重查。";
                 case DAEMON_DOWN:
                     return "这不是授权问题——授权记录还在，坏的是 Magisk 自己的后台服务。\n"
@@ -111,8 +114,10 @@ public final class Shell {
                     return "这台设备没有 root，或用的是不被支持的 su 实现。\n"
                             + "分类与预览功能不需要 root，仍可正常使用。";
                 case TIMEOUT:
-                    return "授权框可能被系统折叠成了通知，或屏幕已熄灭。\n"
-                            + "请在 Magisk 里直接给 Deskly 授权，然后回来重试。";
+                    return "授权框可能被系统折叠成了通知、被「白名单类」模块静默拦掉，或屏幕已熄灭。\n"
+                            + "最稳的办法是不等弹窗，直接去「超级用户列表」授权：\n"
+                            + "打开 Magisk → 底部「超级用户」→ 找到 Deskly 打开开关。\n"
+                            + "列表里没有 Deskly 就先回本页重试一次，让它发起请求后再去授权。";
                 default:
                     return "把下面这行发给我，我按它继续查。";
             }
@@ -122,13 +127,13 @@ public final class Shell {
         public String shortAction() {
             switch (kind) {
                 case DENIED:
-                    return "在 Magisk 里给 Deskly 授权";
+                    return "到超级用户列表授权";
                 case DAEMON_DOWN:
                     return "重启手机可恢复";
                 case NO_SU:
                     return "分类与预览仍可用";
                 case TIMEOUT:
-                    return "在 Magisk 里直接授权";
+                    return "到超级用户列表授权";
                 default:
                     return "";
             }
@@ -242,7 +247,11 @@ public final class Shell {
         if (cur >= 0) {
             return cur;
         }
-        Out o = exec("nsenter -t 1 -m -- true", 8);
+        // 60 秒，不是 8 秒。这条命令也是走 su 的：首次调用会弹 Magisk 授权框，
+        // 8 秒根本不够人点。而超时被 destroyForcibly 杀掉时，Magisk 会把它记成
+        // 「用户拒绝」，之后就再也不弹了——用户看到的现象就是"点应用方案毫无反应，
+        // 超级用户列表里也找不到 Deskly"。已授权时它立刻返回，不会真等满 60 秒。
+        Out o = exec("nsenter -t 1 -m -- true", 60);
         if (o.code == 0) {
             nsMode = 1;
             return 1;

@@ -3,6 +3,7 @@ package io.github.cobylinweiqi.deskly.ui;
 import android.animation.ValueAnimator;
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.Intent;
 import android.graphics.Typeface;
 import android.graphics.drawable.Drawable;
 import android.view.Gravity;
@@ -681,8 +682,8 @@ public final class DesktopSection {
         busy = true;
         btnApply.setEnabled(false);
         btnLoad.setEnabled(false);
-        tvStatus.setText("正在写入…（桌面会闪一下，随后自动回到桌面）");
-        tvApplyHint.setText("正在写入，别退出 App…");
+        tvStatus.setText("正在确认 root 授权…");
+        tvApplyHint.setText("没授权的话，去「超级用户列表」里给 Deskly 打开开关");
 
         final AppClassifier.Scheme scheme = plan.scheme();
         final boolean blank = plan.firstScreenBlank();
@@ -695,6 +696,32 @@ public final class DesktopSection {
             DeskWriter.Result res = null;
             File copy = null;
             try {
+                // 写入前先确认 root。这一步以前不存在，代价很直接：没授权时
+                // DbCopy.pull 只返回 null，界面给的是「读取最新布局失败」——
+                // 既没说清是缺授权，也没告诉用户该去哪点，于是大家只能猜。
+                // 这里把「超级用户列表」这条唯一有效的路径摆到对话框里。
+                Shell.Probe probe = Shell.probe(25);
+                if (!probe.ok()) {
+                    act.runOnUiThread(() -> {
+                        busy = false;
+                        if (act.isFinishing() || act.isDestroyed()) {
+                            return;
+                        }
+                        btnApply.setEnabled(true);
+                        btnLoad.setEnabled(true);
+                        tvStatus.setText(probe.headline());
+                        tvApplyHint.setText("还没有 root 授权，桌面未被改动");
+                        applyBar.setVisibility(View.VISIBLE);
+                        showRootDialog(probe);
+                    });
+                    return;
+                }
+                act.runOnUiThread(() -> {
+                    if (!act.isFinishing() && !act.isDestroyed()) {
+                        tvStatus.setText("正在写入…（桌面会闪一下，随后自动回到桌面）");
+                        tvApplyHint.setText("正在写入，别退出 App…");
+                    }
+                });
                 // 重读一次再算：用户可能刚在桌面上拖过图标，按旧模型写就是错的
                 copy = DbCopy.pull(act, pkg);
                 if (copy == null) {
@@ -844,6 +871,47 @@ public final class DesktopSection {
                 .setMessage(msg)
                 .setPositiveButton("知道了", null)
                 .show();
+    }
+
+    /**
+     * 应用方案时没拿到 root 的专用提示。
+     *
+     * <p>为什么单独做一个对话框、而不是复用 {@link #dialog}：整理这条路唯一的解法是
+     * <b>去「超级用户列表」里授权</b>，用户需要从弹窗直接跳过去；只有一个"知道了"
+     * 等于让他自己回忆 Magisk 在哪。
+     *
+     * <p>三个按钮：知道了 / 打开 Magisk / 重试。「重试」会重新走一遍 doApply，
+     * 所以用户在 Magisk 里点完允许切回来，按一下就能接着整理，不用重新分析。
+     */
+    private void showRootDialog(Shell.Probe probe) {
+        if (act.isFinishing() || act.isDestroyed()) {
+            return;
+        }
+        AlertDialog d = new AlertDialog.Builder(act)
+                .setTitle("需要 root 授权")
+                .setMessage("应用方案会改写桌面的数据库，必须先拿到 root。\n\n"
+                        + probe.report())
+                .setNegativeButton("知道了", null)
+                .setNeutralButton("打开 Magisk", (x, w) -> openMagisk())
+                .setPositiveButton("重试", (x, w) -> doApply())
+                .create();
+        d.show();
+        // 重试是这里的主路径，把它做成实心按钮，别让人在三个灰字里找。
+        d.getButton(AlertDialog.BUTTON_POSITIVE).setTextColor(0xFF4F46E5);
+    }
+
+    /** 直接拉起 Magisk 管理器；找不到就提示手动打开，不静默失败。 */
+    private void openMagisk() {
+        try {
+            Intent i = act.getPackageManager().getLaunchIntentForPackage("com.topjohnwu.magisk");
+            if (i != null) {
+                i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                act.startActivity(i);
+                return;
+            }
+        } catch (Throwable ignored) {
+        }
+        toast("没找到 Magisk，请从桌面手动打开，进入「超级用户」页给 Deskly 授权");
     }
 
     private void toast(String s) {

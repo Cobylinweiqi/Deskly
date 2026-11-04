@@ -10,8 +10,8 @@ android {
         applicationId = "io.github.cobylinweiqi.deskly"
         minSdk = 26
         targetSdk = 34
-        versionCode = 22
-        versionName = "0.14.0"
+        versionCode = 23
+        versionName = "0.14.1"
     }
 
     // libxposed 的模块描述文件必须原样进 APK 根目录，不能被 shrink/merge 规则丢弃
