@@ -15,6 +15,15 @@ public final class AppEntry {
     /** 图标主色缓存，0 表示还没算过。按颜色分方案时按需填充，避免重复 rasterize。 */
     public int dominant;
 
+    /**
+     * 从 PackageManager 补出的应用名。桌面库的 title 可能为空、是资源引用或直接是包名，
+     * 这时只靠 DB 里的名字做中文关键词匹配会整批落「其它」。
+     */
+    public String pmLabel = "";
+
+    /** {@link android.content.pm.ApplicationInfo#category}；-1 表示未声明/取不到。 */
+    public int category = -1;
+
     public AppEntry(String label, String pkg, String activity, boolean system, Drawable icon) {
         this.label = label == null ? pkg : label;
         this.pkg = pkg;

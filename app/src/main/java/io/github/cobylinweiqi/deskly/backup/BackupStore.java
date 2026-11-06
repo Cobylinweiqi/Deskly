@@ -192,7 +192,11 @@ public final class BackupStore {
                 s.integrity = "未知";
             }
 
-            try (Cursor c = d.rawQuery("SELECT count(*) FROM favorites", null)) {
+            io.github.cobylinweiqi.deskly.organize.LauncherProfile prof =
+                    io.github.cobylinweiqi.deskly.organize.LauncherProfile.detect(d, null);
+            String layoutTable = prof.sqlTable();
+
+            try (Cursor c = d.rawQuery("SELECT count(*) FROM " + layoutTable, null)) {
                 if (c.moveToFirst()) {
                     s.items = c.getInt(0);
                 }
@@ -209,8 +213,11 @@ public final class BackupStore {
 
             // 应用图标单独数一遍：列表里直接告诉用户这份备份"精确到几个图标"，
             // 而不是一个混着文件夹与小组件的总条目数。
+            // 枚举按库识别：小米 0/14，Launcher3 系（真我 / ColorOS）0/1/6。
+            String appTypes = prof.appTypesIn();
             try (Cursor c = d.rawQuery(
-                    "SELECT count(*) FROM favorites WHERE itemType IN (0,14)", null)) {
+                    "SELECT count(*) FROM " + layoutTable
+                            + " WHERE itemType IN (" + appTypes + ")", null)) {
                 if (c.moveToFirst()) {
                     s.apps = c.getInt(0);
                 }

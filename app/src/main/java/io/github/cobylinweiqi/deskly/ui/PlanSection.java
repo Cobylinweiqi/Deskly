@@ -47,6 +47,8 @@ public final class PlanSection {
     private final PlanConfig cfg;
     /** 当前桌面屏数，0 表示还没分析。锁定 Chip 按它生成。 */
     private int screenCount;
+    /** 0.16.3：第二步的方案摘要也要用读库探测到的文件夹占位，别再写死 2×2 / 每屏 6 个。 */
+    private int folderSpan = LayoutPlan.FOLDER_SPAN;
     private final Map<Scheme, Row> rows = new EnumMap<>(Scheme.class);
     private final Map<Scheme, Integer> groupCounts = new EnumMap<>(Scheme.class);
 
@@ -144,6 +146,14 @@ public final class PlanSection {
         cfg.retainLockedUpTo(screenCount);
         cfg.save(act);
         paintLocks();
+    }
+
+    /** 分析完把桌面探测到的文件夹占位告诉这里；后面每次重画排布都会用同一份值。 */
+    public void setFolderSpan(int span) {
+        this.folderSpan = span > 0 ? span : LayoutPlan.FOLDER_SPAN;
+        if (lastGroups != null) {
+            paintPlan();
+        }
     }
 
     public java.util.Set<Integer> lockedScreens() {
@@ -478,7 +488,7 @@ public final class PlanSection {
             return;
         }
         LayoutPlan plan = LayoutPlan.build(lastGroups, cfg.firstScreenBlank, cfg.pins,
-                lastSlots, cfg.lockedCount());
+                lastSlots, cfg.lockedCount(), folderSpan);
         lastPlan = plan;
         tvPlanSummary.setText(plan.summary());
         screenBox.removeAllViews();

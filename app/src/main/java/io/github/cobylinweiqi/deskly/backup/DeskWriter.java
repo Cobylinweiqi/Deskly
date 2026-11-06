@@ -8,6 +8,7 @@ import android.database.sqlite.SQLiteDatabase;
 import io.github.cobylinweiqi.deskly.core.DbInject;
 import io.github.cobylinweiqi.deskly.organize.DeskPlan;
 import io.github.cobylinweiqi.deskly.organize.DesktopModel;
+import io.github.cobylinweiqi.deskly.organize.LauncherProfile;
 
 import java.io.File;
 import java.io.FileInputStream;
@@ -17,6 +18,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
@@ -37,6 +39,10 @@ import java.util.Set;
  *       而是"第几个"的编码，行号只是被顺手写成 4 个一行的结果。</li>
  *   <li>文件夹本体在桌面是 {@code spanX=spanY=2}，一屏 4×6 只能放 6 个。</li>
  * </ol>
+ *
+ * <p>上面三条是<b>小米</b>的约定。Launcher3 系（realme UI / ColorOS）由
+ * {@link LauncherProfile} 切到自己的写法：文件夹 itemType=2、占 1×1 格、
+ * 成员用 {@code rank} 排序。判据来自库本身，不按机型名硬切。
  *
  * <p>写库之后的生效问题不在这一层，全部交给 {@link DbInject}——那里才是"看起来成功、
  * 其实没生效"的根源。
@@ -62,6 +68,10 @@ public final class DeskWriter {
         public int verified = -1;
         /** 回读结论，直接拼进成功文案。 */
         public String verdict = "";
+        /** 库里真实存在的文件夹行数（回读），用来发现「写了但桌面把行丢了」。 */
+        public int folderRowsBack = -1;
+        /** 探测到的库结构诊断，直接进回执，真机排查时不必再猜。 */
+        public String diagnostics = "";
     }
 
     private DeskWriter() {
@@ -97,7 +107,9 @@ public final class DeskWriter {
         try {
             rebuild(work, plan, r, folderIds);
         } catch (Throwable t) {
-            r.msg = "在副本上重建布局失败：" + t + "\n桌面未被改动，可用快照 " + pre.id + " 回滚";
+            r.msg = "在副本上重建布局失败：" + t
+                    + (r.diagnostics.isEmpty() ? "" : "\n诊断：" + r.diagnostics)
+                    + "\n桌面未被改动，可用快照 " + pre.id + " 回滚";
             clean(work);
             return r;
         }
@@ -148,7 +160,7 @@ public final class DeskWriter {
         // 5) 回读真库，数一遍"到底有多少图标落在了我们建的文件夹里"，顺便核对屏号与格位。
         StringBuilder moved = new StringBuilder();
         StringBuilder placed = new StringBuilder();
-        r.verified = verifyBack(ctx, pkg, plan, folderIds, moved, placed);
+        r.verified = verifyBack(ctx, pkg, plan, folderIds, moved, placed, plan.profile, r);
         if (r.verified < 0) {
             r.verdict = "回读失败（" + DbCopy.lastError + "），以写入时的核对为准";
         } else if (r.verified == plan.total) {
@@ -168,28 +180,57 @@ public final class DeskWriter {
                     : "\n⚠ 格位和计划不一致：" + placed;
         }
 
+        if (r.folderRowsBack >= 0 && r.folderRowsBack < folderIds.size()) {
+            r.verdict += "\n⚠ 回读只剩 " + r.folderRowsBack + "/" + folderIds.size()
+                    + " 个文件夹行——桌面可能丢弃了这些行（itemType 或必需列不匹配）";
+        }
         r.ok = true;
         r.msg = "已整理 " + r.moved + " 个图标 · " + r.folderCount + " 个文件夹"
                 + (r.removedFolders > 0 ? " · 清掉 " + r.removedFolders + " 个旧文件夹" : "")
-                + " · " + inj.brief() + "\n" + r.verdict;
+                + " · " + inj.brief() + "\n" + r.verdict
+                + "\n诊断：" + r.diagnostics;
         return r;
     }
 
     // ───────────────────────── 重建 ─────────────────────────
 
-    private static void rebuild(File work, DeskPlan plan, Result r, List<Integer> folderIds)
+    /**
+     * 只改库文件，不碰真库、不拍快照、不做 root 相关操作。
+     *
+     * <p>包级可见是为了让跨 ROM 测试能在 JVM 上直接跑到真正写库的那段 SQL——
+     * {@link #apply} 依赖 {@code DbCopy} / {@code DbInject} 走 su，本地没法跑。
+     */
+    static void rebuild(File work, DeskPlan plan, Result r, List<Integer> folderIds)
             throws Exception {
         SQLiteDatabase db = SQLiteDatabase.openDatabase(
                 work.getAbsolutePath(), null, SQLiteDatabase.OPEN_READWRITE);
         try {
-            Set<String> cols = columns(db, "favorites");
+            // 方案里带着读库时识别出的方言；老调用方（或手搓的 plan）没带就现场再探一次。
+            LauncherProfile prof = plan.profile != null
+                    ? plan.profile : LauncherProfile.detect(db, null);
+            if (!prof.hasLayoutTable()) {
+                throw new IllegalStateException("库里没有桌面布局表（favorites）");
+            }
+            Set<String> cols = columns(db, prof.table);
+            r.diagnostics = prof.diagnostics();
+            // 0.16.2：与排屏共用读库时探测到的占位。旧写法 prof.isMiui() ? 2 : 1
+            // 和 LayoutPlan 写死的 2×2 从来没对齐过：HyperOS 桌面按 1 格排，
+            // 13 个文件夹却被算成 3 屏，写回坐标也稀疏。
+            int folderSpan = plan.folderSpan > 0 ? plan.folderSpan : (prof.isMiui() ? 2 : 1);
+            // 以桌面自己写出来的行做模板：厂商私有列（NOT NULL 或加载时必读的字段）
+            // 会原样带过来，避免「插入成功、桌面却把文件夹行静默丢掉」。
+            // 小米的模板为空，写库仍是 0.14.1 的手工构造。
+            ContentValues seedTemplate = prof.isMiui()
+                    ? new ContentValues() : folderSeed(db, prof);
 
             // 旧文件夹的 id 集合：只用来判断"哪些要从库里删掉"。
             // 名字匹配不在这里做——库里的 title 可能是 com.miui.home:string/xxx 这种
             // 资源引用，只有 DesktopModel 读过之后才知道它叫「工具」。
             Set<Integer> oldIds = new LinkedHashSet<>();
             try (Cursor c = db.rawQuery(
-                    "SELECT _id FROM favorites WHERE itemType=21 AND container=-100", null)) {
+                    "SELECT _id FROM " + prof.table + " WHERE itemType IN ("
+                            + prof.folderTypesIn()
+                            + ") AND container=-100", null)) {
                 while (c.moveToNext()) {
                     oldIds.add(c.getInt(0));
                 }
@@ -198,8 +239,8 @@ public final class DeskWriter {
             // 有非应用成员的旧文件夹不能删：那些成员（组件之类）不进新文件夹，删了会成孤儿
             Set<Integer> protectedFolders = new HashSet<>();
             try (Cursor c = db.rawQuery(
-                    "SELECT DISTINCT container FROM favorites WHERE container>0"
-                            + " AND itemType NOT IN (0,14)", null)) {
+                    "SELECT DISTINCT container FROM " + prof.table + " WHERE container>0"
+                            + " AND itemType NOT IN (" + prof.appTypesIn() + ")", null)) {
                 while (c.moveToNext()) {
                     protectedFolders.add(c.getInt(0));
                 }
@@ -221,35 +262,50 @@ public final class DeskWriter {
                         // 复用：只改它自己在桌面上的位置
                         ContentValues v = new ContentValues();
                         v.put("container", DesktopModel.CONTAINER_DESKTOP);
-                        v.put("screen", b.screen);
+                        v.put("screen", prof.toDbScreen(b.screen));
                         v.put("cellX", b.cellX);
                         v.put("cellY", b.cellY);
-                        v.put("spanX", 2);
-                        v.put("spanY", 2);
+                        v.put("spanX", folderSpan);
+                        v.put("spanY", folderSpan);
                         putIf(v, cols, "extendContainer", -1);
                         putIf(v, cols, "isOnlySupportExtend", 0);
-                        db.update("favorites", v, "_id=?", new String[]{String.valueOf(id)});
+                        db.update(prof.table, v, "_id=?", new String[]{String.valueOf(id)});
                         kept.add(id);
                     } else {
-                        ContentValues v = new ContentValues();
+                        ContentValues v = new ContentValues(seedTemplate);
+                        // 模板可能来自一个应用图标行：把只属于快捷方式的字段清掉，
+                        // 否则文件夹会带着别人的图标 / intent 被桌面当成快捷方式。
+                        for (String drop : APP_ONLY_COLUMNS) {
+                            v.remove(drop);
+                        }
                         v.put("title", b.group);
                         v.put("intent", (String) null);
                         v.put("container", DesktopModel.CONTAINER_DESKTOP);
-                        v.put("screen", b.screen);
+                        v.put("screen", prof.toDbScreen(b.screen));
                         v.put("cellX", b.cellX);
                         v.put("cellY", b.cellY);
-                        v.put("spanX", 2);
-                        v.put("spanY", 2);
-                        v.put("itemType", DesktopModel.TYPE_FOLDER);
+                        v.put("spanX", folderSpan);
+                        v.put("spanY", folderSpan);
+                        v.put("itemType", prof.folderType());
                         putIf(v, cols, "appWidgetId", -1);
                         putIf(v, cols, "itemFlags", 0);
                         putIf(v, cols, "profileId", 0);
                         putIf(v, cols, "extendContainer", -1);
                         putIf(v, cols, "isOnlySupportExtend", 0);
                         putIf(v, cols, "originWidgetId", -1);
-                        long newId = db.insert("favorites", null, v);
+                        putIf(v, cols, "rank", 0);
+                        putIf(v, cols, "options", 0);
+                        putIf(v, cols, "modified", 0);
+                        putIf(v, cols, "restored", 0);
+                        // 小米库没有这类列，且要保证恒等变换，所以只给非小米分支补
+                        if (!prof.isMiui()) {
+                            fillRequired(db, prof.table, v);
+                        }
+                        long newId = db.insert(prof.table, null, v);
                         if (newId <= 0) {
-                            throw new IllegalStateException("新建文件夹「" + b.group + "」失败");
+                            throw new IllegalStateException("新建文件夹「" + b.group
+                                    + "」失败（表 " + prof.table + " · itemType "
+                                    + prof.folderType() + " · 已填 " + v.size() + " 列）");
                         }
                         kept.add((int) newId);
                         id = (int) newId;
@@ -257,17 +313,22 @@ public final class DeskWriter {
                     // 记下来，写完之后回读真库要按这些 container 数成员
                     folderIds.add(id);
 
-                    // 组内成员：cellX = 序号，cellY = 序号/4（真机编码方式，见类注释）
+                    // 组内成员：小米是 cellX=序号、cellY=序号/4（真机编码方式，见类注释）；
+                    // Launcher3 系用 rank 排序，cellY 恒 0，两种都按序号递增，不依赖 ROM 枚举。
                     int idx = 0;
                     for (DesktopModel.Item it : b.members) {
                         ContentValues v = new ContentValues();
                         v.put("container", id);
                         v.put("screen", -1);
                         v.put("cellX", idx);
-                        v.put("cellY", idx / DesktopModel.FOLDER_COLUMNS);
+                        v.put("cellY", prof.miuiFolderCells
+                                ? idx / DesktopModel.FOLDER_COLUMNS : 0);
                         putIf(v, cols, "extendContainer", -1);
                         putIf(v, cols, "isOnlySupportExtend", 0);
-                        int n = db.update("favorites", v, "_id=?",
+                        if (!prof.miuiFolderCells) {
+                            putIf(v, cols, "rank", idx);
+                        }
+                        int n = db.update(prof.table, v, "_id=?",
                                 new String[]{String.valueOf(it.id)});
                         if (n != 1) {
                             throw new IllegalStateException(
@@ -281,11 +342,15 @@ public final class DeskWriter {
                     // itemType=1 的「查找」入口。它们的序号必须接在新成员后面，
                     // 否则会和某个应用抢同一个格子，Launcher 上表现为图标重叠或丢失。
                     if (reused) {
-                        for (int leftover : leftovers(db, id, b)) {
+                        for (int leftover : leftovers(db, id, b, prof)) {
                             ContentValues v = new ContentValues();
                             v.put("cellX", idx);
-                            v.put("cellY", idx / DesktopModel.FOLDER_COLUMNS);
-                            db.update("favorites", v, "_id=?",
+                            v.put("cellY", prof.miuiFolderCells
+                                    ? idx / DesktopModel.FOLDER_COLUMNS : 0);
+                            if (!prof.miuiFolderCells) {
+                                putIf(v, cols, "rank", idx);
+                            }
+                            db.update(prof.table, v, "_id=?",
                                     new String[]{String.valueOf(leftover)});
                             idx++;
                         }
@@ -297,14 +362,14 @@ public final class DeskWriter {
                 // 必须在删旧文件夹之前做——锁定屏里的文件夹本体也在这张表里。
                 for (Map.Entry<Integer, Integer> e : plan.frozenScreens.entrySet()) {
                     ContentValues v = new ContentValues();
-                    v.put("screen", e.getValue());
-                    db.update("favorites", v, "_id=?",
+                    v.put("screen", prof.toDbScreen(e.getValue()));
+                    db.update(prof.table, v, "_id=?",
                             new String[]{String.valueOf(e.getKey())});
                 }
 
                 // 选择"随屏清空"的小组件：从这里删掉
                 for (int id : plan.dropIds) {
-                    db.delete("favorites", "_id=?", new String[]{String.valueOf(id)});
+                    db.delete(prof.table, "_id=?", new String[]{String.valueOf(id)});
                 }
 
                 // 没被复用的旧文件夹删掉；被保护的不碰；锁定屏里的永远不删
@@ -314,11 +379,11 @@ public final class DeskWriter {
                             || plan.keptFolderIds.contains(id)) {
                         continue;
                     }
-                    removed += db.delete("favorites", "_id=?", new String[]{String.valueOf(id)});
+                    removed += db.delete(prof.table, "_id=?", new String[]{String.valueOf(id)});
                 }
                 r.removedFolders = removed;
 
-                syncScreens(db, plan.screenCount);
+                syncScreens(db, plan.screenCount, prof);
                 db.setTransactionSuccessful();
             } finally {
                 db.endTransaction();
@@ -326,7 +391,9 @@ public final class DeskWriter {
 
             // 逐条回读：UPDATE 返回 1 不等于真的落到了该在的地方
             try (Cursor c = db.rawQuery(
-                    "SELECT count(*) FROM favorites WHERE container>0 AND itemType IN (0,14)", null)) {
+                    "SELECT count(*) FROM " + prof.table
+                            + " WHERE container>0 AND itemType IN ("
+                            + prof.appTypesIn() + ")", null)) {
                 if (c.moveToFirst()) {
                     int total = c.getInt(0);
                     if (total != plan.total) {
@@ -343,16 +410,111 @@ public final class DeskWriter {
         }
     }
 
+    /** 模板来自应用图标行时必须清掉的字段。 */
+    private static final String[] APP_ONLY_COLUMNS = {
+            "intent", "icon", "iconPackage", "iconResource", "iconType", "uri",
+            "appWidgetProvider", "appWidgetId", "component", "shortcutId",
+            "packageName", "className",
+    };
+
+    /**
+     * 取一条桌面自己写出来的行，作为新建文件夹行的模板。
+     *
+     * <p>只用于 Launcher3 系：这些桌面常在 favorites 上加私有列，且加载 FolderInfo 时
+     * 会假设它们非 NULL。手工拼 8 个字段能 insert 成功，却会在桌面启动时被整行丢掉——
+     * 表现为「屏数变了、图标能换屏，但一个文件夹都没有」。直接复制现成的行，
+     * 所有私有列都带着厂商自己的默认值，最省事也最不容易猜错。
+     */
+    private static ContentValues folderSeed(SQLiteDatabase db, LauncherProfile prof) {
+        ContentValues seed = new ContentValues();
+        Cursor c = null;
+        try {
+            c = db.rawQuery("SELECT * FROM " + prof.table + " WHERE itemType IN ("
+                    + prof.folderTypesIn() + ") AND container<0 LIMIT 1", null);
+            if (!c.moveToFirst()) {
+                c.close();
+                c = db.rawQuery("SELECT * FROM " + prof.table
+                        + " WHERE container=-100 AND intent IS NOT NULL LIMIT 1", null);
+                if (!c.moveToFirst()) {
+                    return seed;
+                }
+            }
+            for (int i = 0; i < c.getColumnCount(); i++) {
+                String name = c.getColumnName(i);
+                // _id 让 SQLite 自增，不能照抄模板的
+                if ("_id".equals(name)) {
+                    continue;
+                }
+                switch (c.getType(i)) {
+                    case Cursor.FIELD_TYPE_INTEGER:
+                        seed.put(name, c.getLong(i));
+                        break;
+                    case Cursor.FIELD_TYPE_FLOAT:
+                        seed.put(name, c.getDouble(i));
+                        break;
+                    case Cursor.FIELD_TYPE_STRING:
+                        seed.put(name, c.getString(i));
+                        break;
+                    case Cursor.FIELD_TYPE_BLOB:
+                        seed.put(name, c.getBlob(i));
+                        break;
+                    default:
+                        break;
+                }
+            }
+        } catch (Throwable ignored) {
+        } finally {
+            if (c != null) {
+                try {
+                    c.close();
+                } catch (Throwable ignored) {
+                }
+            }
+        }
+        return seed;
+    }
+
+    /** 补齐 NOT NULL 且没有 DEFAULT 的列；缺一列 insert 就会返回 -1。 */
+    private static void fillRequired(SQLiteDatabase db, String table, ContentValues v) {
+        try (Cursor c = db.rawQuery("PRAGMA table_info(" + table + ")", null)) {
+            while (c.moveToNext()) {
+                String name = c.getString(1);
+                if ("_id".equals(name) || v.containsKey(name)) {
+                    continue;
+                }
+                boolean notNull = c.getInt(3) != 0;
+                boolean hasDefault = !c.isNull(4);
+                if (!notNull || hasDefault) {
+                    continue;
+                }
+                String type = c.getString(2) == null
+                        ? "" : c.getString(2).toUpperCase(Locale.US);
+                if (type.contains("INT") || type.contains("BOOL") || type.contains("REAL")
+                        || type.contains("NUMERIC") || type.contains("FLOA")
+                        || type.contains("DOUB")) {
+                    v.put(name, 0);
+                } else if (type.contains("BLOB")) {
+                    v.put(name, new byte[0]);
+                } else {
+                    v.put(name, "");
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
     /** 某个文件夹里不属于本次整理的非应用成员（小米的「查找」这类系统入口）。 */
-    private static List<Integer> leftovers(SQLiteDatabase db, int folderId, DeskPlan.Bucket b) {
+    private static List<Integer> leftovers(SQLiteDatabase db, int folderId, DeskPlan.Bucket b,
+                                           LauncherProfile prof) {
         Set<Integer> mine = new HashSet<>();
         for (DesktopModel.Item it : b.members) {
             mine.add(it.id);
         }
         List<Integer> out = new ArrayList<>();
         try (Cursor c = db.rawQuery(
-                "SELECT _id FROM favorites WHERE container=? AND itemType NOT IN (0,14)"
-                        + " ORDER BY cellX",
+                "SELECT _id FROM " + prof.table
+                        + " WHERE container=? AND itemType NOT IN ("
+                        + prof.appTypesIn() + ") ORDER BY cellX",
                 new String[]{String.valueOf(folderId)})) {
             while (c.moveToNext()) {
                 int id = c.getInt(0);
@@ -369,38 +531,102 @@ public final class DeskWriter {
      *
      * <p>屏表不补，写进去的第 7 屏在桌面里就不存在；空屏不清，整理后从 6 屏缩到 3 屏
      * 会剩下 3 个滑得过去却什么都没有的空白页。
+     *
+     * <p>小米用 {@code screens(screenOrder)}，Launcher3 系常见
+     * {@code workspaceScreens(screenRank)} 或 0 起屏号，表名、列名、编号都由方言给出。
      */
-    private static void syncScreens(SQLiteDatabase db, int want) {
-        if (!tableExists(db, "screens")) {
+    /** 包级可见：跨 ROM 的屏表补齐可以在 JVM 上直接跑，不必拉真机 / root。 */
+    static void syncScreens(SQLiteDatabase db, int want, LauncherProfile prof) {
+        String table = prof.screensTable;
+        if (table == null || table.isEmpty() || !tableExists(db, table)) {
             return;
         }
-        Set<String> screenCols = columns(db, "screens");
+        Set<String> screenCols = columns(db, table);
+        String rank = prof.screensRankColumn;
+        int nextRank = maxRank(db, table, rank) + 1;
+
+        // 与写回布局行用同一份映射：toDbScreen 给的就是屏表里真实存在 / 即将插入的 id，
+        // 这里绝不再按 screenBase 另算一遍——那是真我「只显示 1 屏」的直接原因。
+        Set<Integer> need = new LinkedHashSet<>();
         for (int i = 1; i <= want; i++) {
-            try (Cursor c = db.rawQuery("SELECT 1 FROM screens WHERE _id=?",
-                    new String[]{String.valueOf(i)})) {
+            int dbId = prof.toDbScreen(i);
+            need.add(dbId);
+            try (Cursor c = db.rawQuery("SELECT 1 FROM " + table + " WHERE _id=?",
+                    new String[]{String.valueOf(dbId)})) {
                 if (c.moveToFirst()) {
                     continue;
                 }
             }
-            ContentValues v = new ContentValues();
-            v.put("_id", i);
-            putIf(v, screenCols, "screenOrder", i - 1);
-            putIf(v, screenCols, "screenType", 0);
-            db.insert("screens", null, v);
+            // 0.16.3：厂商屏表常有 NOT NULL 且无默认值的私有列。手工拼字段要么插入失败，
+            // 要么插出一行桌面加载时直接丢掉的残缺屏，所以拿桌面自己写的一行当模板。
+            insertScreenRow(db, table, screenCols, dbId, rank, nextRank++);
         }
 
-        // 屏号 > want 且一条 favorites 都没有的屏，删掉；第 1 屏保留（可能是刻意留空的）
+        // 不在 need 里、且整屏一条桌面行都没有的屏才删；第一屏永远保留（可能是刻意留空）。
+        int first = prof.toDbScreen(1);
         List<Integer> empty = new ArrayList<>();
         try (Cursor c = db.rawQuery(
-                "SELECT s._id FROM screens s WHERE s._id>? AND s._id>1"
-                        + " AND NOT EXISTS (SELECT 1 FROM favorites f WHERE f.screen=s._id)",
-                new String[]{String.valueOf(want)})) {
+                "SELECT s._id FROM " + table + " s WHERE NOT EXISTS (SELECT 1 FROM "
+                        + prof.table + " f WHERE f.screen=s._id)", null)) {
             while (c.moveToNext()) {
-                empty.add(c.getInt(0));
+                int id = c.getInt(0);
+                if (id != first && !need.contains(id)) {
+                    empty.add(id);
+                }
             }
         }
         for (int id : empty) {
-            db.delete("screens", "_id=?", new String[]{String.valueOf(id)});
+            db.delete(table, "_id=?", new String[]{String.valueOf(id)});
+        }
+    }
+
+    /** 用屏表现有的一行做模板补一行；只替换 _id 与排序列，其余私有列原样带过来。 */
+    private static void insertScreenRow(SQLiteDatabase db, String table, Set<String> cols,
+                                        int id, String rank, int rankValue) {
+        ContentValues v = new ContentValues();
+        try (Cursor c = db.query(table, null, null, null, null, null, "_id ASC", "1")) {
+            if (c.moveToFirst()) {
+                for (String col : c.getColumnNames()) {
+                    if ("_id".equals(col) || !cols.contains(col)) {
+                        continue;
+                    }
+                    int i = c.getColumnIndex(col);
+                    if (i < 0 || c.isNull(i)) {
+                        continue;
+                    }
+                    switch (c.getType(i)) {
+                        case Cursor.FIELD_TYPE_INTEGER:
+                            v.put(col, c.getLong(i));
+                            break;
+                        case Cursor.FIELD_TYPE_FLOAT:
+                            v.put(col, c.getDouble(i));
+                            break;
+                        case Cursor.FIELD_TYPE_BLOB:
+                            v.put(col, c.getBlob(i));
+                            break;
+                        default:
+                            v.put(col, c.getString(i));
+                            break;
+                    }
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        v.put("_id", id);
+        if (rank != null && !rank.isEmpty() && cols.contains(rank)) {
+            v.put(rank, rankValue);
+        }
+        db.insert(table, null, v);
+    }
+
+    private static int maxRank(SQLiteDatabase db, String table, String rank) {
+        if (rank == null || rank.isEmpty()) {
+            return -1;
+        }
+        try (Cursor c = db.rawQuery("SELECT max(" + rank + ") FROM " + table, null)) {
+            return c.moveToFirst() && !c.isNull(0) ? c.getInt(0) : -1;
+        } catch (Throwable ignored) {
+            return -1;
         }
     }
 
@@ -484,7 +710,7 @@ public final class DeskWriter {
      */
     private static int verifyBack(Context ctx, String pkg, DeskPlan plan,
                                   List<Integer> folderIds, StringBuilder moved,
-                                  StringBuilder placed) {
+                                  StringBuilder placed, LauncherProfile profile, Result r) {
         if (folderIds.isEmpty()) {
             return -1;
         }
@@ -508,13 +734,27 @@ public final class DeskWriter {
             SQLiteDatabase db = SQLiteDatabase.openDatabase(back.getAbsolutePath(), null,
                     SQLiteDatabase.OPEN_READONLY);
             try {
+                LauncherProfile prof = profile != null
+                        ? profile : LauncherProfile.detect(db, null);
                 int members = -1;
-                try (Cursor c = db.rawQuery("SELECT count(*) FROM favorites"
-                        + " WHERE itemType IN (0,14) AND container IN (" + in + ")", null)) {
+                try (Cursor c = db.rawQuery("SELECT count(*) FROM " + prof.table
+                        + " WHERE itemType IN (" + prof.appTypesIn()
+                        + ") AND container IN (" + in + ")", null)) {
                     if (c.moveToFirst()) {
                         members = c.getInt(0);
                     }
                 }
+                // 光数成员不够：成员 container 指向一个「桌面不认的文件夹行」时，
+                // 上面那个数照样是满的，用户看到的却是一个文件夹都没有。
+                int folderRows = 0;
+                try (Cursor c = db.rawQuery("SELECT count(*) FROM " + prof.table
+                        + " WHERE _id IN (" + in + ") AND itemType IN ("
+                        + prof.folderTypesIn() + ") AND container=-100", null)) {
+                    if (c.moveToFirst()) {
+                        folderRows = c.getInt(0);
+                    }
+                }
+                r.folderRowsBack = folderRows;
                 // 顺带核对"文件夹是不是还在我写的那个屏上、那个格位上"。
                 // 用户报的"钉到第 6 屏却出现在第 2 屏"、"不是从左上角开始排"，
                 // 靠这一条就能把责任分清：是桌面把位置改了，还是我们压根没写对。
@@ -522,11 +762,13 @@ public final class DeskWriter {
                 int posShown = 0;
                 for (int i = 0; i < folderIds.size() && i < plan.buckets.size(); i++) {
                     DeskPlan.Bucket b = plan.buckets.get(i);
+                    int expected = prof.toDbScreen(b.screen);
                     int as = -999;
                     int ax = -999;
                     int ay = -999;
                     try (Cursor c = db.rawQuery(
-                            "SELECT screen,cellX,cellY FROM favorites WHERE _id=?",
+                            "SELECT screen,cellX,cellY FROM " + prof.table
+                                    + " WHERE _id=?",
                             new String[]{String.valueOf(folderIds.get(i))})) {
                         if (c.moveToFirst()) {
                             as = c.getInt(0);
@@ -534,23 +776,29 @@ public final class DeskWriter {
                             ay = c.getInt(2);
                         }
                     }
-                    if (as != b.screen && shown++ < 3) {
+                    if (as != expected && shown++ < 3) {
                         if (moved.length() > 0) {
                             moved.append('、');
                         }
                         moved.append(b.group).append(" 计划第").append(b.screen)
-                                .append("屏→库里第").append(as).append("屏");
+                                .append("屏→库里第").append(prof.fromDbScreen(as)).append("屏");
                     }
-                    if ((as != b.screen || ax != b.cellX || ay != b.cellY)
+                    if ((as != expected || ax != b.cellX || ay != b.cellY)
                             && posShown++ < 3) {
                         if (placed.length() > 0) {
                             placed.append('、');
                         }
                         placed.append(b.group).append(" 计划(").append(b.screen).append("屏 ")
                                 .append(b.cellX).append(',').append(b.cellY).append(")→库里(")
-                                .append(as).append("屏 ").append(ax).append(',').append(ay)
-                                .append(')');
+                                .append(prof.fromDbScreen(as)).append("屏 ").append(ax).append(',')
+                                .append(ay).append(')');
                     }
+                }
+                // 0.16.3：真我「方案 2 屏、桌面 1 屏」的判定证据。桌面重启后会自己开库、
+                // 甚至把 screen 值改回去，光看写入前的计划看不出来，回执必须带上真库现状。
+                r.diagnostics += "\n写回后 screen 分布 " + screenHistogram(db, prof.table);
+                if (!prof.screensTable.isEmpty()) {
+                    r.diagnostics += "\n写回后屏表行 " + screenTableRows(db, prof);
                 }
                 return members;
             } finally {
@@ -564,6 +812,46 @@ public final class DeskWriter {
         } finally {
             DbCopy.delete(back);
         }
+    }
+
+    /** 真库里桌面行（排除热区与文件夹成员）每个 screen 值各有多少行。 */
+    private static String screenHistogram(SQLiteDatabase db, String table) {
+        StringBuilder sb = new StringBuilder();
+        try (Cursor c = db.rawQuery("SELECT screen,count(*) FROM " + table
+                + " WHERE container<=0 AND container<>-101 GROUP BY screen ORDER BY screen", null)) {
+            while (c.moveToNext()) {
+                if (sb.length() > 0) {
+                    sb.append(' ');
+                }
+                sb.append(c.getInt(0)).append('=').append(c.getInt(1));
+            }
+        } catch (Throwable ignored) {
+            return "（读不到）";
+        }
+        return sb.length() == 0 ? "（无桌面行）" : sb.toString();
+    }
+
+    /** 真库屏表现有行，形如 {@code 0/0 1/1}（_id/排序列）。 */
+    private static String screenTableRows(SQLiteDatabase db, LauncherProfile prof) {
+        String t = prof.screensTable;
+        String rank = prof.screensRankColumn;
+        String sql = "SELECT _id" + (rank.isEmpty() ? "" : "," + rank) + " FROM " + t
+                + " ORDER BY " + (rank.isEmpty() ? "_id" : rank) + " ASC, _id ASC";
+        StringBuilder sb = new StringBuilder();
+        try (Cursor c = db.rawQuery(sql, null)) {
+            while (c.moveToNext()) {
+                if (sb.length() > 0) {
+                    sb.append(' ');
+                }
+                sb.append(c.getInt(0));
+                if (!rank.isEmpty()) {
+                    sb.append('/').append(c.getInt(1));
+                }
+            }
+        } catch (Throwable ignored) {
+            return "（读不到）";
+        }
+        return sb.length() == 0 ? "（空）" : sb.toString();
     }
 
     private static void clean(File work) {

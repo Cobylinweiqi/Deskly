@@ -16,7 +16,8 @@ import java.util.Map;
  *
  * <p>分成三类：
  * <ul>
- *   <li>{@link Folder}——一级文件夹（container&lt;0 且 itemType=21），自带成员列表；</li>
+ *   <li>{@link Folder}——一级文件夹，自带成员列表；具体 itemType 由
+ *       {@link LauncherProfile} 按库识别（小米 21 / Launcher3 系 2）；</li>
  *   <li>{@link Item} 散落图标——直接摆在桌面或热区上的应用/快捷方式/组件；</li>
  *   <li>热区图标——container=-101，通常不该动，但要知道它们占着位置。</li>
  * </ul>
@@ -29,7 +30,7 @@ public final class DesktopModel {
     public static final int CONTAINER_DESKTOP = -100;
     public static final int CONTAINER_HOTSEAT = -101;
 
-    /** favorites.itemType 的取值，Launcher3 与 MIUI 共用。 */
+    /** 小米 / HyperOS 的 favorites.itemType 取值。Launcher3 系见 {@link LauncherProfile}。 */
     public static final int TYPE_APP = 0;
     public static final int TYPE_SHORTCUT = 14;
     public static final int TYPE_GROUP = 19;
@@ -37,6 +38,9 @@ public final class DesktopModel {
 
     /** 小米文件夹打开后是 4 列。用来给新成员算建议行号。 */
     public static final int FOLDER_COLUMNS = 4;
+
+    /** 这份库识别出来的方言。上游排版、下游写库都用它，避免各猜各的。 */
+    public LauncherProfile profile;
 
     public static class Item {
         public int id;
@@ -55,13 +59,49 @@ public final class DesktopModel {
         public String pkg = "";
         /** 完整组件名 {@code pkg/cls}。 */
         public String component = "";
+        /** 库里这一行有没有 intent。跨 ROM 判断「这是应用图标」比 itemType 可靠。 */
+        public boolean hasIntent;
+        /**
+         * 由 {@link DesktopModel#read} 填入。手工构造的 Item 允许为 null，
+         * 此时退回小米语义（也就是 0.14.1 的行为），保证老调用方一个都不用改。
+         */
+        public LauncherProfile profile;
 
         public boolean isFolder() {
-            return itemType == TYPE_FOLDER;
+            return profile == null ? itemType == TYPE_FOLDER : profile.isFolder(itemType);
         }
 
         public boolean isApp() {
-            return itemType == TYPE_APP || itemType == TYPE_SHORTCUT;
+            if (profile == null) {
+                return itemType == TYPE_APP || itemType == TYPE_SHORTCUT;
+            }
+            if (profile.isApp(itemType)) {
+                return true;
+            }
+            // Launcher3 系兜底：厂商用了私有 itemType 时，只要有 intent 且不是
+            // 文件夹 / 组件，就当它是可整理的应用图标。
+            if (!profile.isMiui() && hasIntent && !isFolder()
+                    && itemType != 4 && itemType != TYPE_GROUP) {
+                return true;
+            }
+            // 0.16.1 通用兜底：LauncherProfile 探测应用枚举时明确排除了 itemType=4
+            // 和 19（AOSP 里 4 是 APPWIDGET），但厂商私有枚举里 4 完全可能就是应用图标。
+            // 这类行一旦被判成非应用就会进 stayPut 留在原屏——用户看到的正是
+            // 「很多应用没进文件夹」。所以这里不再看 itemType 具体数值，改看结构事实：
+            // 有 component 包名、占 1×1 格、不是文件夹/分组、不在热区。
+            // 真正的小组件一般没有 component 且占多格，进不来。
+            return looksLikeAppIcon();
+        }
+
+        /** 有明确 component 的 1×1 图标行；文件夹 / 分组 / 热区 / 多格组件一律不算。 */
+        private boolean looksLikeAppIcon() {
+            if (!hasIntent || pkg == null || pkg.isEmpty() || isFolder()) {
+                return false;
+            }
+            if (itemType == TYPE_GROUP) {
+                return false;
+            }
+            return spanX <= 1 && spanY <= 1 && container != CONTAINER_HOTSEAT;
         }
     }
 
@@ -108,6 +148,8 @@ public final class DesktopModel {
     public int screenCount;
     /** favorites 表里的总行数，用来在界面上核对"读到的确实是这个库"。 */
     public int totalItems;
+    /** 桌面上文件夹占几格（1 或 2）。排屏、写回、预览共用这一份，见 {@link #detectFolderSpan}。 */
+    public int folderSpan = 1;
 
     public Folder folderById(int id) {
         for (Folder f : folders) {
@@ -118,7 +160,7 @@ public final class DesktopModel {
         return null;
     }
 
-    /** 真正"可以归位"的散落图标：桌面上的应用/快捷方式。组件类（itemType=19）不动。 */
+    /** 真正"可以归位"的散落图标：桌面上的应用/快捷方式。组件类不动。 */
     public List<Item> relocatable() {
         List<Item> out = new ArrayList<>();
         for (Item i : looseOnDesktop) {
@@ -154,23 +196,38 @@ public final class DesktopModel {
 
     private static DesktopModel read(SQLiteDatabase db, Context ctx, String launcherPkg) {
         DesktopModel m = new DesktopModel();
+        m.profile = LauncherProfile.detect(db, launcherPkg);
+        if (!m.profile.hasLayoutTable()) {
+            throw new IllegalStateException("这份库不是桌面布局库（没有 favorites 或等价表）；表清单："
+                    + LauncherProfile.describe(db));
+        }
         Map<Integer, Folder> byId = new LinkedHashMap<>();
 
         String sql = "SELECT _id,title,intent,container,screen,cellX,cellY,spanX,spanY,itemType"
-                + " FROM favorites";
+                + " FROM " + m.profile.sqlTable();
         try (Cursor c = db.rawQuery(sql, null)) {
             while (c.moveToNext()) {
                 Item it = new Item();
+                it.profile = m.profile;
                 it.id = c.getInt(0);
                 it.rawTitle = c.getString(1) == null ? "" : c.getString(1);
                 String intent = c.getString(2);
                 it.container = c.getInt(3);
-                it.screen = c.getInt(4);
+                // 屏号在内存里一律 1 起算，写回时再由 DeskWriter 反算回库的约定。
+                // 小米 screenBase=1，这一步是恒等变换；Launcher3 系为 0 时才真正平移。
+                int rawScreen = c.getInt(4);
+                // 0.16.3：真我私有库里桌面行的 container 未必是 -100（状态行会显示
+                // 「0 个散在桌面上」），只按「非热区、非文件夹成员」判断；屏号一律交给
+                // 方言映射，Launcher3 系现在按屏表 id 反查，不再靠 screenBase 做加减法。
+                it.screen = it.container <= 0 && it.container != CONTAINER_HOTSEAT
+                        && rawScreen >= 0
+                        ? m.profile.fromDbScreen(rawScreen) : rawScreen;
                 it.cellX = c.getInt(5);
                 it.cellY = c.getInt(6);
                 it.spanX = c.isNull(7) ? 1 : c.getInt(7);
                 it.spanY = c.isNull(8) ? 1 : c.getInt(8);
                 it.itemType = c.getInt(9);
+                it.hasIntent = intent != null && !intent.isEmpty();
                 parseComponent(it, intent);
                 it.title = resolveTitle(ctx, launcherPkg, it.rawTitle);
                 m.totalItems++;
@@ -191,6 +248,7 @@ public final class DesktopModel {
 
                 if (it.isFolder() && it.container < 0) {
                     Folder f = new Folder();
+                    f.profile = m.profile;
                     f.id = it.id;
                     f.rawTitle = it.rawTitle;
                     f.title = it.title;
@@ -244,31 +302,130 @@ public final class DesktopModel {
         }
         m.screenCount = maxScreen;
         m.totalRows = maxCellY + 1;
+        m.folderSpan = detectFolderSpan(m.folders);
         return m;
+    }
+
+    /**
+     * 从库里现有文件夹的坐标推断「一个文件夹占几格」。
+     *
+     * <p><b>不能只看 spanX。</b>小米 / HyperOS 的库里文件夹行常写着 {@code spanX=2}，
+     * 但桌面把文件夹当普通图标排（4 列 × 6 行，一屏 24 个）。按 2×2 算就会把
+     * 13 个分类文件夹摊到 3 屏，而桌面实际一屏就装下了——预览说第 2、3 屏、
+     * 桌面上却全挤在第 1 屏，就是这么来的。坐标是桌面自己写回来的，最可信：
+     * 同一屏同一行出现相邻 cellX（差 1），或一行超过 2 个文件夹，就是 1 格网格。
+     *
+     * <p>没有足够样本时退回 span 众数；一个文件夹都没有时默认 1（现代桌面）。
+     */
+    private static int detectFolderSpan(List<Folder> folders) {
+        int big = 0;
+        int small = 0;
+        Map<String, List<Integer>> byRow = new LinkedHashMap<>();
+        for (Folder f : folders) {
+            if (f.container >= 0) {
+                continue;
+            }
+            if (Math.max(f.spanX, f.spanY) >= 2) {
+                big++;
+            } else {
+                small++;
+            }
+            String key = f.screen + "/" + f.cellY;
+            List<Integer> xs = byRow.get(key);
+            if (xs == null) {
+                xs = new ArrayList<>();
+                byRow.put(key, xs);
+            }
+            xs.add(f.cellX);
+        }
+        for (List<Integer> xs : byRow.values()) {
+            if (xs.size() > 2) {
+                return 1;
+            }
+            if (xs.size() < 2) {
+                continue;
+            }
+            java.util.Collections.sort(xs);
+            if (xs.get(1) - xs.get(0) == 1) {
+                return 1;
+            }
+        }
+        return big > small ? 2 : 1;
     }
 
     /** 读的过程中用于暂存"成员先到、文件夹后到"的情况。 */
     private final List<Item> pendingMembers = new ArrayList<>();
 
     /**
-     * 从 Intent 串里抠出组件名。
+     * 从 Intent 串里抠出组件名与包名。
      *
      * <p>不用 {@code Intent.parseUri}：库里的串是 Launcher 自己序列化的 {@code #Intent;...;end}
      * 形式，且部分记录含自定义 extra，parseUri 遇到不认识的 extra 会抛异常。正则更耐操。
+     *
+     * <p><b>0.16.0：包名不只从 {@code component=} 取。</b>真我 / ColorOS 的布局库里
+     * 出现过 {@code ComponentInfo{pkg/cls}}、{@code package=} / {@code S.package=} extra、
+     * 甚至直接一个 {@code pkg/cls} 裸串。旧写法只认第一种，取不到 pkg 时分类只能看到
+     * 一个空包名，整批预装图标就都落进「其它」。
      */
+    private static final java.util.regex.Pattern P_COMPONENT =
+            java.util.regex.Pattern.compile("(?:^|;)(?:[A-Za-z]\\.)?component=([^;]+)");
+    private static final java.util.regex.Pattern P_PACKAGE =
+            java.util.regex.Pattern.compile("(?:^|;)(?:[A-Za-z]\\.)?package=([^;]+)");
+    private static final java.util.regex.Pattern P_COMPONENT_INFO =
+            java.util.regex.Pattern.compile("ComponentInfo\\{([^}/]+)/");
+    private static final java.util.regex.Pattern P_COMPONENT_INFO_FULL =
+            java.util.regex.Pattern.compile("ComponentInfo\\{([^}]+)\\}");
+
+    /** 从任意一种 intent 写法里取出包名；取不到返回空串。 */
+    public static String packageOf(String intent) {
+        if (intent == null || intent.isEmpty()) {
+            return "";
+        }
+        String[] candidates = {
+                first(P_COMPONENT, intent),
+                first(P_COMPONENT_INFO, intent),
+                first(P_PACKAGE, intent),
+                intent,
+        };
+        for (String c : candidates) {
+            String p = packagePart(c);
+            if (!p.isEmpty()) {
+                return p;
+            }
+        }
+        return "";
+    }
+
+    private static String first(java.util.regex.Pattern p, String s) {
+        java.util.regex.Matcher m = p.matcher(s);
+        return m.find() ? m.group(1) : "";
+    }
+
+    /** 取 {@code pkg/cls} 的 pkg 段，并校验它长得像包名，免得把 {@code end} 之类当包名。 */
+    private static String packagePart(String comp) {
+        if (comp == null || comp.isEmpty()) {
+            return "";
+        }
+        String s = comp.trim();
+        int brace = s.indexOf('{');
+        if (brace >= 0) {
+            s = s.substring(brace + 1);
+        }
+        int slash = s.indexOf('/');
+        String p = (slash > 0 ? s.substring(0, slash) : s).trim();
+        return p.matches("[A-Za-z][A-Za-z0-9_]*(?:\\.[A-Za-z][A-Za-z0-9_]*)+") ? p : "";
+    }
+
     private static void parseComponent(Item it, String intent) {
         if (intent == null || intent.isEmpty()) {
             return;
         }
-        int i = intent.indexOf("component=");
-        if (i < 0) {
-            return;
+        String comp = first(P_COMPONENT, intent);
+        if (comp.isEmpty()) {
+            comp = first(P_COMPONENT_INFO_FULL, intent);
         }
-        int end = intent.indexOf(';', i);
-        String comp = end > 0 ? intent.substring(i + 10, end) : intent.substring(i + 10);
         it.component = comp;
-        int slash = comp.indexOf('/');
-        it.pkg = slash > 0 ? comp.substring(0, slash) : comp;
+        it.pkg = packageOf(intent);
     }
 
     /**

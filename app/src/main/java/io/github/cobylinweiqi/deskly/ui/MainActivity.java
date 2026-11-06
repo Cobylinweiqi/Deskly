@@ -1,7 +1,9 @@
 package io.github.cobylinweiqi.deskly.ui;
 
 import android.app.Activity;
+import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
 import android.os.Bundle;
 import android.text.TextUtils;
 import android.view.View;
@@ -10,6 +12,7 @@ import android.widget.TextView;
 
 import io.github.cobylinweiqi.deskly.R;
 import io.github.cobylinweiqi.deskly.core.Shell;
+import io.github.cobylinweiqi.deskly.probe.TargetRegistry;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -40,7 +43,11 @@ import java.util.List;
  */
 public class MainActivity extends Activity {
 
-    private static final String DEFAULT_TARGET = "com.miui.home";
+    /** 一个都认不出来时的兜底：保持 0.14.1 的小米行为，不让老用户突然变了目标。 */
+    private static final String FALLBACK_TARGET = "com.miui.home";
+
+    /** 本次运行实际要操作的桌面包名，onCreate 里按"当前默认桌面"挑出来。 */
+    private String target = FALLBACK_TARGET;
 
     private TextView tvMainWarn;
     private TextView tvFooter;
@@ -57,7 +64,7 @@ public class MainActivity extends Activity {
     private DesktopSection desktop;
     private RelocateSection relocate;
 
-    /** 小米桌面是否安装。与 root 状态分开存，因为两条告警要能同时显示。 */
+    /** 目标桌面是否安装。与 root 状态分开存，因为两条告警要能同时显示。 */
     private boolean launcherInstalled = false;
     /** 最近一次 root 探测结果，null 表示还没探过。 */
     private Shell.Probe rootProbe;
@@ -80,7 +87,8 @@ public class MainActivity extends Activity {
         pageOrganize = findViewById(R.id.pageOrganize);
         pageConfig = findViewById(R.id.pageConfig);
 
-        launcherInstalled = installed(DEFAULT_TARGET);
+        target = pickTarget();
+        launcherInstalled = installed(target);
 
         plan = new PlanSection(this,
                 findViewById(R.id.presetContainer),
@@ -90,7 +98,7 @@ public class MainActivity extends Activity {
                 findViewById(R.id.lockContainer),
                 findViewById(R.id.cbKeepWidgets));
 
-        desktop = new DesktopSection(this, DEFAULT_TARGET, pageOrganize, plan);
+        desktop = new DesktopSection(this, target, pageOrganize, plan);
 
         // 换方案 / 改钉屏 / 勾留空 都要重算分组与屏位——预览和写入依据同一份结果
         plan.setPresetListener(s -> desktop.rebuild());
@@ -102,7 +110,7 @@ public class MainActivity extends Activity {
 
         // 运行引导的「重新检测」复用备份区块的探测：root 探测只该有一个入口，
         // 否则一次授权会弹出两个 su 请求，看起来像应用在乱弹框。
-        guide = new GuideSection(this, DEFAULT_TARGET, pageConfig,
+        guide = new GuideSection(this, target, pageConfig,
                 (TextView) findViewById(R.id.tvGuideHint),
                 () -> {
                     if (backup != null) {
@@ -110,7 +118,7 @@ public class MainActivity extends Activity {
                     }
                 });
 
-        backup = new BackupSection(this, DEFAULT_TARGET,
+        backup = new BackupSection(this, target,
                 (TextView) findViewById(R.id.tvBackupStatus),
                 (TextView) findViewById(R.id.tvBackupHead),
                 (TextView) findViewById(R.id.tvBackupHint),
@@ -132,7 +140,7 @@ public class MainActivity extends Activity {
         about = new AboutSection(this, pageConfig);
 
         // 归位区块依赖"改坏了能退回去"，归位写入前会自己拍快照，不等用户切 tab
-        relocate = new RelocateSection(this, DEFAULT_TARGET,
+        relocate = new RelocateSection(this, target,
                 (TextView) findViewById(R.id.tvRelocateStatus),
                 (LinearLayout) findViewById(R.id.relocateList),
                 (findViewById(R.id.btnRelocate)),
@@ -205,7 +213,8 @@ public class MainActivity extends Activity {
     private void refreshWarn() {
         List<String> warns = new ArrayList<>();
         if (!launcherInstalled) {
-            warns.add("没找到小米桌面。整理依赖它的数据库结构，其它 ROM 需自行验证。");
+            warns.add("没找到已支持的系统桌面（当前目标：" + target
+                    + "）。请在 LSPosed 作用域里确认桌面包名，并检查 root 是否可用。");
         }
         if (rootProbe != null && !rootProbe.ok()) {
             String act = rootProbe.shortAction();
@@ -232,6 +241,39 @@ public class MainActivity extends Activity {
         } catch (Throwable t) {
             return "";
         }
+    }
+
+    /**
+     * 挑出这台机器真正在用的桌面。
+     *
+     * <p>先问系统"HOME 是谁"——真我 realme UI 实测答 {@code com.android.launcher}，
+     * HyperOS 答 {@code com.miui.home}，比按厂商名猜准。有些 ROM 的
+     * {@code resolveActivity} 会返回系统解析器而不是桌面，所以要求这个包确实装了、
+     * 且 {@link TargetRegistry#isSupportedLauncher} 认得出（白名单或 launcher/home 名字）。
+     * 认不出再退回"装了谁就用谁"，最后才用小米兜底（保持 0.14.1 的行为）。
+     */
+    private String pickTarget() {
+        try {
+            Intent home = new Intent(Intent.ACTION_MAIN);
+            home.addCategory(Intent.CATEGORY_HOME);
+            ResolveInfo ri = getPackageManager().resolveActivity(
+                    home, PackageManager.MATCH_DEFAULT_ONLY);
+            if (ri != null && ri.activityInfo != null
+                    && ri.activityInfo.packageName != null
+                    && TargetRegistry.isSupportedLauncher(ri.activityInfo.packageName)
+                    && installed(ri.activityInfo.packageName)) {
+                // 不只是已知表里那几个：真我 / OPPO 换个 launcher 包名也要能认出来，
+                // 否则会退回小米兜底，整个整理都指向一个不存在的包。
+                return ri.activityInfo.packageName;
+            }
+        } catch (Throwable ignored) {
+        }
+        for (String pkg : TargetRegistry.KNOWN_LAUNCHERS.keySet()) {
+            if (installed(pkg)) {
+                return pkg;
+            }
+        }
+        return FALLBACK_TARGET;
     }
 
     private boolean installed(String target) {

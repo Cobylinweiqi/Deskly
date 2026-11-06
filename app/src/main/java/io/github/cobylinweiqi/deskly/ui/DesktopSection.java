@@ -146,6 +146,8 @@ public final class DesktopSection {
             return;
         }
         busy = true;
+        // 重新分析要重新问一次应用名 / category：期间用户可能装了新 App
+        AppClassifier.clearPmCache();
         stopIdlePulse();
         btnLoad.setEnabled(false);
         btnLoad.setText("分析中…");
@@ -166,7 +168,7 @@ public final class DesktopSection {
                 } else {
                     copy = DbCopy.pull(act, pkg);
                     if (copy == null) {
-                        err = "读不到桌面数据库：" + (DbCopy.lastError == null ? "未知原因" : DbCopy.lastError);
+                        err = DbCopy.lastError == null ? "读不到桌面数据库" : DbCopy.lastError;
                     } else {
                         m = DesktopModel.read(copy, act, pkg);
                         // 顺带核一个数：本机还有多少可启动应用不在这张桌面上。
@@ -209,6 +211,7 @@ public final class DesktopSection {
                 model = fModel;
                 // 屏数变了，锁定 Chip 与越界的锁定记录要一起收敛
                 plan.setScreenCount(fModel.screenCount);
+                plan.setFolderSpan(fModel.folderSpan);
                 renderOverview(fModel, fInstalled, fMissing);
                 rebuild();
             });
@@ -270,9 +273,13 @@ public final class DesktopSection {
         }
         String lockNote = locks.isEmpty() ? ""
                 : " · 锁定 " + locks.size() + " 屏（跳过 " + lockedApps + " 个图标）";
-        tvStatus.setText("桌面已读取：其中 " + countLoose(m) + " 个散在桌面上、"
+        tvStatus.setText("桌面已读取：库里共 " + m.totalItems + " 行，其中 "
+                + countLoose(m) + " 个散在桌面上、"
                 + hotseat + " 个在底部固定栏（不动）" + lockNote
-                + "。下面两个方案都算好了，选中即预览。");
+                + "。下面两个方案都算好了，选中即预览。"
+                + "\n文件夹占 " + m.folderSpan + "×" + m.folderSpan + " 格 · 每屏可放 "
+                + LayoutPlan.slotsForSpan(m.folderSpan) + " 个"
+                + "\n诊断：" + (m.profile == null ? "无" : m.profile.diagnostics()));
 
         if (missing > 0) {
             tvNote.setText("本机 " + installed + " 个可启动应用里有 " + missing
@@ -388,8 +395,7 @@ public final class DesktopSection {
 
     private String groupOf(DesktopModel.Item i, AppClassifier.Scheme scheme) {
         if (scheme != AppClassifier.Scheme.COLOR) {
-            return AppClassifier.groupByFunction(
-                    new AppEntry(i.title, i.pkg, "", isSystem(i.pkg), null));
+            return AppClassifier.groupByFunction(act.getPackageManager(), i.title, i.pkg);
         }
         String key = i.pkg == null ? "" : i.pkg;
         String hit = colorGroupCache.get(key);
@@ -406,18 +412,6 @@ public final class DesktopSection {
         String g = IconPalette.groupOf(IconPalette.dominantColor(d));
         colorGroupCache.put(key, g);
         return g;
-    }
-
-    private boolean isSystem(String pkg) {
-        if (pkg == null || pkg.isEmpty()) {
-            return false;
-        }
-        try {
-            android.content.pm.ApplicationInfo ai = act.getPackageManager().getApplicationInfo(pkg, 0);
-            return (ai.flags & android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0;
-        } catch (Throwable t) {
-            return false;
-        }
     }
 
     /** 屏位预览只要组名与数量，转成 LayoutPlan 认识的形状即可。 */
@@ -448,7 +442,8 @@ public final class DesktopSection {
 
         tvSummary.setText("整理后 " + p.buckets.size() + " 个文件夹 · 共 " + p.screenCount
                 + " 屏" + (p.lockedCount > 0 ? "（锁定 " + p.lockedCount + " 屏）" : "")
-                + " · 每屏最多 " + LayoutPlan.FOLDERS_PER_SCREEN + " 个");
+                + " · 每屏最多 " + LayoutPlan.slotsForSpan(p.folderSpan) + " 个"
+                + "（文件夹占 " + p.folderSpan + "×" + p.folderSpan + "）");
         for (DeskPlan.Bucket b : p.buckets) {
             groupBox.addView(buildBucket(b));
         }
@@ -666,6 +661,21 @@ public final class DesktopSection {
                 .append(desk.lockedCount > 0
                         ? "，跳过锁定的 " + desk.lockedCount + " 屏" : "")
                 .append("）。动手前会自动拍一张「整理前」快照，随时能退回去。");
+        if (desk.readRows > 0) {
+            sb.append("\n\n桌面库读到 ").append(desk.readRows).append(" 行，其中 ")
+                    .append(desk.total).append(" 个图标参与整理，其余 ")
+                    .append(desk.skippedRows)
+                    .append(" 行原地保留（热区 / 小组件 / 文件夹本体 / 锁定屏）。");
+            if (desk.skippedRows > desk.total) {
+                sb.append("\n注意：未参与整理的条目比图标还多。如果桌面上明显不止 ")
+                        .append(desk.total)
+                        .append(" 个应用，说明大量图标被判成了「非应用」，请把这几行数字发我。");
+            }
+        }
+        if (desk.unknownCount > 0) {
+            sb.append("\n\n还有 ").append(desk.unknownCount)
+                    .append(" 个应用没认出类别，会集中在「其它」；认不出的系统预装已归到「系统」。");
+        }
 
         new AlertDialog.Builder(act)
                 .setTitle("整理 " + desk.total + " 个图标？")

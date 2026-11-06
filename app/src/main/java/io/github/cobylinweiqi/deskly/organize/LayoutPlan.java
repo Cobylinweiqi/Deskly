@@ -43,6 +43,43 @@ public final class LayoutPlan {
     /** 一屏上文件夹能站的 6 个候选位，按 Launcher 的 2 列 3 行铺开。索引即顺序。 */
     public static final int[] DEFAULT_SLOTS = {0, 1, 2, 3, 4, 5};
 
+    /**
+     * 0.16.2：一屏能放几个文件夹，取决于这台桌面把文件夹当几格。
+     * 1 格网格 → 4×6=24；2×2 大文件夹 → 2×3=6（0.14.1 的旧假设）。
+     */
+    public static int slotsForSpan(int span) {
+        int s = normalizeSpan(span);
+        return Math.max(1, COLUMNS / s) * Math.max(1, ROWS / s);
+    }
+
+    /** 该网格下所有候选位，索引即「左上 → 右下」的顺序。 */
+    public static int[] defaultSlots(int span) {
+        int n = slotsForSpan(span);
+        int[] a = new int[n];
+        for (int i = 0; i < n; i++) {
+            a[i] = i;
+        }
+        return a;
+    }
+
+    /** 第 slot 个候选位的格坐标。span=1 时是 0..3 / 0..5，span=2 时是 0,2 / 0,2,4。 */
+    public static int cellX(int slot, int span) {
+        int s = normalizeSpan(span);
+        return (slot % Math.max(1, COLUMNS / s)) * s;
+    }
+
+    public static int cellY(int slot, int span) {
+        int s = normalizeSpan(span);
+        return (slot / Math.max(1, COLUMNS / s)) * s;
+    }
+
+    private static int normalizeSpan(int span) {
+        return Math.max(1, Math.min(span, COLUMNS));
+    }
+
+    /** 本次排屏采用的文件夹占位。默认 2 以保住直接调用 build 的老路径。 */
+    public int folderSpan = FOLDER_SPAN;
+
     public static final class Screen {
         public final int number;
         /** true 表示这是被刻意留空的第一屏。 */
@@ -135,7 +172,18 @@ public final class LayoutPlan {
     public static LayoutPlan build(Map<String, List<AppEntry>> groups, boolean firstScreenBlank,
                                    Map<String, Integer> pins, Map<Integer, int[]> slotsOf,
                                    int lockedCount) {
+        return build(groups, firstScreenBlank, pins, slotsOf, lockedCount, FOLDER_SPAN);
+    }
+
+    /**
+     * @param folderSpan 文件夹占几格，由 {@link DesktopModel#folderSpan} 从库里探测。
+     *                   1 格网格的一屏容量是 24，不再是旧版写死的 6。
+     */
+    public static LayoutPlan build(Map<String, List<AppEntry>> groups, boolean firstScreenBlank,
+                                   Map<String, Integer> pins, Map<Integer, int[]> slotsOf,
+                                   int lockedCount, int folderSpan) {
         LayoutPlan plan = new LayoutPlan();
+        plan.folderSpan = normalizeSpan(folderSpan);
         plan.lockedCount = Math.max(0, lockedCount);
         plan.startScreen = Math.max(firstScreenBlank ? 2 : 1, plan.lockedCount + 1);
 
@@ -152,7 +200,7 @@ public final class LayoutPlan {
             boolean usable = pin != null && pin > plan.lockedCount
                     && !(firstScreenBlank && pin == 1);
             if (usable) {
-                screenAt(byNumber, pin, slotsOf).folders.add(f);
+                screenAt(byNumber, pin, slotsOf, plan.folderSpan).folders.add(f);
             } else {
                 auto.add(f);
             }
@@ -162,16 +210,16 @@ public final class LayoutPlan {
         // 自动的组从起始屏往后填，遇到已有组的屏先补空位再换屏
         int cursor = plan.startScreen;
         for (Folder f : auto) {
-            Screen s = nextWithRoom(byNumber, cursor, slotsOf);
+            Screen s = nextWithRoom(byNumber, cursor, slotsOf, plan.folderSpan);
             s.folders.add(f);
             cursor = s.number;
         }
 
         // 锁定第 1 屏时，第 1 屏已经是用户自己的内容，不再插一个"留空"占位屏
         if (plan.lockedCount == 0 && firstScreenBlank && !byNumber.containsKey(1)) {
-            byNumber.put(1, new Screen(1, true));
+            byNumber.put(1, new Screen(1, true, defaultSlots(plan.folderSpan)));
         }
-        spillOverflow(byNumber, slotsOf);
+        spillOverflow(byNumber, slotsOf, plan.folderSpan);
         plan.screens.addAll(byNumber.values());
         return plan;
     }
@@ -184,7 +232,7 @@ public final class LayoutPlan {
      * 没有第 7 行。桌面读进去只会把它随手挪到别处，用户看到的就是"我钉的屏它不认"。
      */
     private static void spillOverflow(TreeMap<Integer, Screen> byNumber,
-                                      Map<Integer, int[]> slotsOf) {
+                                      Map<Integer, int[]> slotsOf, int span) {
         int guard = 0;
         while (guard++ < 64) {
             boolean changed = false;
@@ -195,7 +243,7 @@ public final class LayoutPlan {
                 }
                 // 从末尾取，插到下一屏的最前面，相对顺序不会乱
                 Folder extra = s.folders.remove(s.folders.size() - 1);
-                Screen t = nextWithRoom(byNumber, s.number + 1, slotsOf);
+                Screen t = nextWithRoom(byNumber, s.number + 1, slotsOf, span);
                 t.folders.add(0, extra);
                 changed = true;
                 break;
@@ -206,31 +254,31 @@ public final class LayoutPlan {
         }
     }
 
-    private static int[] slotsFor(Map<Integer, int[]> slotsOf, int screen) {
+    private static int[] slotsFor(Map<Integer, int[]> slotsOf, int screen, int span) {
         if (slotsOf == null) {
-            return DEFAULT_SLOTS;
+            return defaultSlots(span);
         }
         int[] s = slotsOf.get(screen);
-        return s == null ? DEFAULT_SLOTS : s;
+        return s == null ? defaultSlots(span) : s;
     }
 
     private static Screen screenAt(TreeMap<Integer, Screen> map, int number,
-                                  Map<Integer, int[]> slotsOf) {
+                                   Map<Integer, int[]> slotsOf, int span) {
         Screen s = map.get(number);
         if (s == null) {
-            s = new Screen(number, false, slotsFor(slotsOf, number));
+            s = new Screen(number, false, slotsFor(slotsOf, number, span));
             map.put(number, s);
         }
         return s;
     }
 
     private static Screen nextWithRoom(TreeMap<Integer, Screen> map, int from,
-                                       Map<Integer, int[]> slotsOf) {
+                                       Map<Integer, int[]> slotsOf, int span) {
         int n = from;
         while (true) {
             Screen s = map.get(n);
             if (s == null) {
-                s = new Screen(n, false, slotsFor(slotsOf, n));
+                s = new Screen(n, false, slotsFor(slotsOf, n, span));
                 map.put(n, s);
                 return s;
             }
@@ -271,8 +319,8 @@ public final class LayoutPlan {
         return "共 " + total + " 屏"
                 + (lockedCount > 0 ? "（锁定 " + lockedCount + " 屏）" : "")
                 + " · " + folderCount + " 个文件夹 · 每屏 "
-                + FOLDERS_PER_SCREEN + " 个（" + COLUMNS + "×" + ROWS + " 网格，文件夹占 "
-                + FOLDER_SPAN + "×" + FOLDER_SPAN + "）"
+                + slotsForSpan(folderSpan) + " 个（" + COLUMNS + "×" + ROWS + " 网格，文件夹占 "
+                + folderSpan + "×" + folderSpan + "）"
                 + (gap.isEmpty() ? "" : " · " + gap);
     }
 

@@ -129,9 +129,17 @@ public final class GuideSection {
         addStep(1, "装好 LSPosed", lspBody,
                 lspOn ? State.OK : State.NEUTRAL, "打开", v -> openPkg(LSPOSED_PKG, "LSPosed"));
 
+        // 推荐作用域只覆盖已适配的 MIUI / Launcher3 两族。认得出但没适配的桌面
+        // （华为 / vivo / 三星等）要明说"未验证"，别让用户以为勾上就能用。
+        String scopeHint = TargetRegistry.RECOMMENDED_SCOPE.contains(pkg)
+                ? "如果「推荐应用」是空的，就在作用域页面搜索 " + pkg
+                        + " 手动勾选：推荐列表只会显示本机已安装的包。"
+                : "当前桌面不在推荐作用域里，需要在作用域页面搜索 " + pkg
+                        + " 手动添加；这个 ROM 的库结构尚未验证，整理前务必先备份。";
         addStep(2, "启用模块，勾选作用域",
                 "LSPosed → 模块 → Deskly 打开开关；作用域里勾选「" + launcherName()
-                        + "」。作用域决定模块能进哪个进程——不勾，模块在桌面里等于没加载。"
+                        + "」（包名 " + pkg + "）。作用域决定模块能进哪个进程——不勾，"
+                        + "模块在桌面里等于没加载。" + scopeHint
                         + "整理与恢复本身走 root 写库，不依赖 hook，但模块要算装完整就得勾上。"
                         + "这一步框架没提供查询接口，只能自己确认。",
                 State.NEUTRAL, "打开 LSPosed", v -> openPkg(LSPOSED_PKG, "LSPosed"));

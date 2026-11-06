@@ -1,7 +1,6 @@
 package io.github.cobylinweiqi.deskly.organize;
 
 import android.content.Context;
-import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.graphics.drawable.Drawable;
 
@@ -72,6 +71,16 @@ public final class DeskPlan {
     public final Map<Integer, int[]> slots = new LinkedHashMap<>();
     /** 参与整理的应用图标总数。 */
     public int total;
+    /** 落进「其它」的图标数：0.16.0 起在确认框里如实报出来，方便对比词典优化效果。 */
+    public int unknownCount;
+    /**
+     * 布局库里实际读到的行数。0.16.1：和 {@link #total} 一起报出来——
+     * 「读到 155 行、只有 6 个图标参与整理」一眼就能判定是 isApp() 判据丢了图标，
+     * 而不是分类不准或写回没生效，省掉一轮 root 诊断。
+     */
+    public int readRows;
+    /** 未参与整理的条目数（文件夹本体 / 热区 / 小组件 / 锁定屏 / 认不出的类型）。 */
+    public int skippedRows;
     /** 整理之后桌面要用到几屏。 */
     public int screenCount;
     /** 当前桌面已有的文件夹数量，用于在回执里说清"18 个旧文件夹 → 9 个新文件夹"。 */
@@ -108,6 +117,15 @@ public final class DeskPlan {
     /** 新文件夹的起始屏号（与 LayoutPlan 保持一致，用于回执与预览）。 */
     public int startScreen = 1;
 
+    /**
+     * 这份方案依据的桌面方言。写库时要靠它生成正确的 itemType / 屏号，
+     * 由 {@code build} 从 {@link DesktopModel#profile} 带下来，不接受另猜一次。
+     */
+    public LauncherProfile profile;
+
+    /** 文件夹占几格，由读库时从现有文件夹坐标探测。排屏与写库必须共用它。 */
+    public int folderSpan = 2;
+
     public int memberCount() {
         int n = 0;
         for (Bucket b : buckets) {
@@ -134,6 +152,8 @@ public final class DeskPlan {
                                  boolean firstScreenBlank, Map<String, Integer> pins,
                                  Set<Integer> lockedScreens, boolean keepOrphanWidgets) {
         DeskPlan plan = new DeskPlan();
+        plan.profile = model.profile;
+        plan.folderSpan = model.folderSpan > 0 ? model.folderSpan : 2;
         plan.oldFolderCount = model.folders.size();
         plan.keepOrphanWidgets = keepOrphanWidgets;
 
@@ -236,6 +256,8 @@ public final class DeskPlan {
             }
         }
         plan.total = apps.size();
+        plan.readRows = model.totalItems;
+        plan.skippedRows = Math.max(0, model.totalItems - apps.size());
         if (apps.isEmpty()) {
             // 没有可整理的图标：锁定屏照样压缩屏号，小组件按策略安置
             plan.screenCount = settle(plan, plan.lockedCount);
@@ -249,6 +271,9 @@ public final class DeskPlan {
             String g = scheme == AppClassifier.Scheme.COLOR
                     ? groupByColor(pm, it)
                     : groupByFunction(pm, it);
+            if (scheme == AppClassifier.Scheme.FUNCTION && AppClassifier.isUnknown(g)) {
+                plan.unknownCount++;
+            }
             List<DesktopModel.Item> list = grouped.get(g);
             if (list == null) {
                 list = new ArrayList<>();
@@ -269,7 +294,7 @@ public final class DeskPlan {
         // 3) 排屏：转成 LayoutPlan 认识的形状，直接用同一份算法。
         //    先把小组件挡掉的格位算出来——不传这个，第 1 屏就会排出 6 个文件夹，
         //    和那个 4×2 的日历叠在一起。
-        plan.slots.putAll(slotsOf(plan.stayPut));
+        plan.slots.putAll(slotsOf(plan.stayPut, plan.folderSpan));
         Map<String, List<AppEntry>> forPlan = new LinkedHashMap<>();
         for (Map.Entry<String, List<DesktopModel.Item>> e : grouped.entrySet()) {
             List<AppEntry> fake = new ArrayList<>(e.getValue().size());
@@ -279,7 +304,7 @@ public final class DeskPlan {
             forPlan.put(e.getKey(), fake);
         }
         LayoutPlan layout = LayoutPlan.build(
-                forPlan, firstScreenBlank, pins, plan.slots, plan.lockedCount);
+                forPlan, firstScreenBlank, pins, plan.slots, plan.lockedCount, plan.folderSpan);
 
         // 4) 屏幕内序号 → 2×2 格位。每屏 6 个文件夹，按 2 列 3 行铺。
         Map<String, Bucket> byGroup = new LinkedHashMap<>();
@@ -300,8 +325,8 @@ public final class DeskPlan {
                 b.screen = s.number;
                 // 站哪个候选位由 Screen 说了算：被小组件压掉的那几个位不能进
                 int slot = s.slotOf(idx);
-                b.cellX = (slot % 2) * LayoutPlan.FOLDER_SPAN;
-                b.cellY = (slot / 2) * LayoutPlan.FOLDER_SPAN;
+                b.cellX = LayoutPlan.cellX(slot, plan.folderSpan);
+                b.cellY = LayoutPlan.cellY(slot, plan.folderSpan);
                 idx++;
                 if (s.number > maxScreen) {
                     maxScreen = s.number;
@@ -357,8 +382,8 @@ public final class DeskPlan {
      * 一个 4×2 的日历压掉上面两个，剩下 {2,3,4,5}——注意是"剩下这四个具体位置"，
      * 不是"还剩四个"，两者写进库里的结果完全不同。
      */
-    private static Map<Integer, int[]> slotsOf(List<DesktopModel.Item> stayPut) {
-        int total = LayoutPlan.FOLDERS_PER_SCREEN;
+    private static Map<Integer, int[]> slotsOf(List<DesktopModel.Item> stayPut, int span) {
+        int total = LayoutPlan.slotsForSpan(span);
         Map<Integer, java.util.Set<Integer>> blocked = new LinkedHashMap<>();
         for (DesktopModel.Item it : stayPut) {
             // 文件夹内的组件 screen 是 -1，不在任何屏上，不影响桌面的格位
@@ -377,10 +402,10 @@ public final class DeskPlan {
             int ex = sx + Math.max(1, it.spanX) - 1;
             int ey = sy + Math.max(1, it.spanY) - 1;
             for (int i = 0; i < total; i++) {
-                int cx = (i % 2) * LayoutPlan.FOLDER_SPAN;
-                int cy = (i / 2) * LayoutPlan.FOLDER_SPAN;
-                boolean overlap = cx <= ex && cx + LayoutPlan.FOLDER_SPAN - 1 >= sx
-                        && cy <= ey && cy + LayoutPlan.FOLDER_SPAN - 1 >= sy;
+                int cx = LayoutPlan.cellX(i, span);
+                int cy = LayoutPlan.cellY(i, span);
+                boolean overlap = cx <= ex && cx + span - 1 >= sx
+                        && cy <= ey && cy + span - 1 >= sy;
                 if (overlap) {
                     java.util.Set<Integer> set = blocked.get(it.screen);
                     if (set == null) {
@@ -407,8 +432,9 @@ public final class DeskPlan {
     }
 
     private static String groupByFunction(PackageManager pm, DesktopModel.Item it) {
-        boolean sys = isSystem(pm, it.pkg);
-        return AppClassifier.groupByFunction(new AppEntry(it.title, it.pkg, "", sys, null));
+        // 与方案卡预览共用 AppClassifier.fromDesktop：应用名、category、系统标志只在一处补齐，
+        // 免得预览说 9 个文件夹、实际排出来 11 个。
+        return AppClassifier.groupByFunction(pm, it.title, it.pkg);
     }
 
     /** 取图标 → 算主色 → 分桶。丢了的应用（包名还在、App 已卸）落到黑白灰，不阻塞整理。 */
@@ -424,21 +450,13 @@ public final class DeskPlan {
         return IconPalette.groupOf(IconPalette.dominantColor(d));
     }
 
-    private static boolean isSystem(PackageManager pm, String pkg) {
-        if (pkg == null || pkg.isEmpty()) {
-            return false;
-        }
-        try {
-            ApplicationInfo ai = pm.getApplicationInfo(pkg, 0);
-            return (ai.flags & ApplicationInfo.FLAG_SYSTEM) != 0;
-        } catch (Throwable t) {
-            return false;
-        }
-    }
-
     /** 一行摘要，用于确认框与状态行。 */
     public String summary() {
-        return "把 " + total + " 个图标整理成 " + buckets.size() + " 个文件夹 · 共 "
+        String s = "把 " + total + " 个图标整理成 " + buckets.size() + " 个文件夹 · 共 "
                 + screenCount + " 屏";
+        if (unknownCount > 0) {
+            s += " · 其中 " + unknownCount + " 个未识别";
+        }
+        return s;
     }
 }

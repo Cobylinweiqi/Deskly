@@ -1,12 +1,16 @@
 package io.github.cobylinweiqi.deskly.backup;
 
+import io.github.cobylinweiqi.deskly.core.LiveDb;
 import io.github.cobylinweiqi.deskly.core.Shell;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * 定位目标桌面的布局数据库。
@@ -34,6 +38,8 @@ public final class LauncherDb {
     private static final String[] NAME_PREFERENCE = {
             "launcher.db", "launcher4x6.db", "launcher4x5.db", "launcher5x5.db",
             "launcher6x5.db", "launcher4x7.db", "launcher5x6.db",
+            // ColorOS / realme UI 常见的网格专用库名
+            "launcher_4x6.db", "launcher_5x6.db", "launcher_4x5.db",
     };
 
     /**
@@ -52,14 +58,42 @@ public final class LauncherDb {
     public final String owner;
     public final String mode;
     public final String context;
+    /** 所有可尝试的 .db 路径，按可信度排序；{@link #path} 恒为第一个。 */
+    public final List<String> candidates;
 
-    private LauncherDb(String pkg, String path, long size, String owner, String mode, String context) {
+    /**
+     * 上一次被验证过「确实含桌面布局表」的库。{@code DbCopy} 挑中后调 {@link #select}
+     * 钉住，保证分析、快照、写回用的是同一个文件，不会"读 A 写 B"。
+     * 只在当前进程内有效；换成别的桌面包名就自动失效。
+     */
+    private static String pinnedPkg;
+    private static String pinnedPath;
+
+    public static void select(String pkg, String path) {
+        pinnedPkg = pkg;
+        pinnedPath = path;
+    }
+
+    public static boolean hasPin(String pkg) {
+        return pkg.equals(pinnedPkg) && pinnedPath != null;
+    }
+
+    public static void forget(String pkg) {
+        if (pkg.equals(pinnedPkg)) {
+            pinnedPkg = null;
+            pinnedPath = null;
+        }
+    }
+
+    private LauncherDb(String pkg, String path, long size, String owner, String mode,
+                       String context, List<String> candidates) {
         this.pkg = pkg;
         this.path = path;
         this.size = size;
         this.owner = owner;
         this.mode = mode;
         this.context = context;
+        this.candidates = candidates;
     }
 
     public String walPath() {
@@ -77,9 +111,18 @@ public final class LauncherDb {
 
     public static LauncherDb discover(String pkg) {
         lastError = null;
+        // 已经被 DbCopy 验证过含布局表的库：直接用，别再按名字猜回去。
+        if (pkg.equals(pinnedPkg) && pinnedPath != null && !pinnedPath.isEmpty()) {
+            List<String> only = new ArrayList<>();
+            only.add(pinnedPath);
+            return finish(pkg, pinnedPath, only);
+        }
         String main = "/data/data/" + pkg + "/databases";
+        String user0 = "/data/user/0/" + pkg + "/databases";
         String de = "/data/user_de/0/" + pkg + "/databases";
-        String[] dirs = {main, de};
+        // ColorOS / realme UI 有把布局库放在 /data/user/0 下的版本，三条一起列，
+        // 仍然只发一次 su（每多一次往返都可能多弹一次授权框）。
+        String[] dirs = {main, user0, de};
 
         // 一条命令列完两个目录：每多一次 su 往返，就可能多弹一次授权框，代价远大于收益。
         // @@ 行是目录分隔标记，避免两个目录的条目混在一起、分不清哪个文件在哪。
@@ -111,7 +154,7 @@ public final class LauncherDb {
         }
         if (!anyListing) {
             String raw = o.text.trim();
-            lastError = "读不到 " + main + " 或 " + de
+            lastError = "读不到 " + main + " / " + user0 + " / " + de
                     + (raw.isEmpty() ? "（目录不存在，或 root 不可用）" : "（" + firstLine(raw) + "）");
             return null;
         }
@@ -119,7 +162,8 @@ public final class LauncherDb {
         // 第一优先：桌面进程此刻真正打开着的那个库。
         // 名字规则再完善也是猜——HyperOS 会为不同网格同时留着 launcher4x6.db / launcher5x6.db，
         // 猜错就是"写入全成功、桌面没变化"。进程的 fd 不会骗人。
-        String live = liveLayoutDb(pkg, listing);
+        LiveDb liveProc = LiveDb.scan(pkg);
+        String live = liveLayoutDb(listing, liveProc);
         String full;
         if (live != null) {
             full = live;
@@ -132,6 +176,47 @@ public final class LauncherDb {
             full = hit[0] + "/" + hit[1];
         }
 
+        return finish(pkg, full, candidatesOf(listing, liveProc, full));
+    }
+
+    /**
+     * 列出所有"可能装着桌面布局"的库，交给 {@link DbCopy} 逐个拷出来验证。
+     * 只按名字启发式挑一个是不够的：真我 / ColorOS 出现过同名但不含 favorites 表的库，
+     * 也出现过桌面真实打开的 .db 名字不以 launcher 开头。
+     */
+    private static List<String> candidatesOf(Map<String, List<String>> listing,
+                                             LiveDb liveProc, String first) {
+        Set<String> out = new LinkedHashSet<>();
+        out.add(first);
+        // 进程此刻打开的所有 .db 都是硬事实，不再只认 launcher 前缀
+        for (String f : liveProc.openDbs()) {
+            if (f.endsWith(".db")) {
+                out.add(f);
+            }
+        }
+        List<String> launcher = new ArrayList<>();
+        List<String> rest = new ArrayList<>();
+        for (Map.Entry<String, List<String>> e : listing.entrySet()) {
+            for (String n : e.getValue()) {
+                if (!n.endsWith(".db") || isKnownNonLayout(n)) {
+                    continue;
+                }
+                String p = e.getKey() + "/" + n;
+                if (n.toLowerCase(Locale.US).startsWith("launcher")) {
+                    launcher.add(p);
+                } else {
+                    rest.add(p);
+                }
+            }
+        }
+        Collections.sort(launcher);
+        Collections.sort(rest);
+        out.addAll(launcher);
+        out.addAll(rest);
+        return new ArrayList<>(out);
+    }
+
+    private static LauncherDb finish(String pkg, String full, List<String> candidates) {
         // toybox 的 stat 支持 -c，格式串用 | 分隔，避免文件名含空格时解析错位
         Shell.Out st = Shell.su("stat -c '%s|%u|%g|%a' " + Shell.q(full) + " 2>/dev/null");
         long size = -1;
@@ -155,7 +240,7 @@ public final class LauncherDb {
             ctx = sp > 0 ? first.substring(0, sp) : "";
         }
 
-        return new LauncherDb(pkg, full, size, owner, mode, ctx);
+        return new LauncherDb(pkg, full, size, owner, mode, ctx, candidates);
     }
 
     /**
@@ -164,9 +249,9 @@ public final class LauncherDb {
      * <p>只接受落在候选目录里的路径——{@code /proc/<pid>/fd} 也可能有别的包的同名库被映射进来，
      * 那不属于我们要改的目标。
      */
-    private static String liveLayoutDb(String pkg, Map<String, List<String>> listing) {
+    private static String liveLayoutDb(Map<String, List<String>> listing, LiveDb liveProc) {
         try {
-            String live = io.github.cobylinweiqi.deskly.core.LiveDb.scan(pkg).layoutDb();
+            String live = liveProc.layoutDb();
             if (live == null) {
                 return null;
             }

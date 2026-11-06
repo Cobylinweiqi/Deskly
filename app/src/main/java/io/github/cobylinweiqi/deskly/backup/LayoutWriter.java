@@ -6,6 +6,7 @@ import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
 
 import io.github.cobylinweiqi.deskly.core.DbInject;
+import io.github.cobylinweiqi.deskly.organize.LauncherProfile;
 
 import java.io.File;
 import java.io.FileInputStream;
@@ -176,9 +177,10 @@ public final class LayoutWriter {
             SQLiteDatabase db = SQLiteDatabase.openDatabase(back.getAbsolutePath(), null,
                     SQLiteDatabase.OPEN_READONLY);
             try {
+                String layoutTable = LauncherProfile.detect(db, null).sqlTable();
                 for (Change c : changes) {
                     try (Cursor cur = db.rawQuery(
-                            "SELECT container FROM favorites WHERE _id=?",
+                            "SELECT container FROM " + layoutTable + " WHERE _id=?",
                             new String[]{String.valueOf(c.itemId)})) {
                         if (cur.moveToFirst() && cur.getInt(0) == c.folderId) {
                             hit++;
@@ -208,6 +210,7 @@ public final class LayoutWriter {
         SQLiteDatabase db = SQLiteDatabase.openDatabase(
                 work.getAbsolutePath(), null, SQLiteDatabase.OPEN_READWRITE);
         int affected = 0;
+        String layoutTable = LauncherProfile.detect(db, null).sqlTable();
         try {
             db.beginTransaction();
             try {
@@ -220,7 +223,7 @@ public final class LayoutWriter {
                     v.put("cellY", c.cellY);
                     v.put("extendContainer", -1);
                     v.put("isOnlySupportExtend", 0);
-                    int n = db.update("favorites", v, "_id=?",
+                    int n = db.update(layoutTable, v, "_id=?",
                             new String[]{String.valueOf(c.itemId)});
                     if (n == 1) {
                         affected++;
@@ -234,7 +237,7 @@ public final class LayoutWriter {
             for (Change c : changes) {
                 int container = -999;
                 try (Cursor cur = db.rawQuery(
-                        "SELECT container FROM favorites WHERE _id=?",
+                        "SELECT container FROM " + layoutTable + " WHERE _id=?",
                         new String[]{String.valueOf(c.itemId)})) {
                     if (cur.moveToFirst()) {
                         container = cur.getInt(0);

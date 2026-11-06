@@ -82,7 +82,7 @@ cp "$APK_PATH" "$TMP_APK"
 gh release create "$TAG" "$TMP_APK" \
   --repo "$MODULES_REPO" \
   --title "$VERSION_NAME" \
-  --notes "Deskly $VERSION_NAME —— 小米桌面整理 LSPosed 模块。源码与说明见主仓库：https://github.com/$MAIN_REPO/releases/tag/$TAG"
+  --notes "Deskly $VERSION_NAME —— 小米 / HyperOS 与真我 realme UI / ColorOS 桌面整理 LSPosed 模块（同一个 APK 自动识别方言）。源码与说明见主仓库：https://github.com/$MAIN_REPO/releases/tag/$TAG"
 
 echo ""
 echo "完成！bot 将在 5~15 分钟内索引，之后在 LSPosed 客户端「在线仓库」搜 Deskly 即可更新。"
