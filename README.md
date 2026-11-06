@@ -2,17 +2,18 @@
 
 # Deskly
 
-**让小米桌面自己整理成该有的样子。**
+**让小米 / 真我桌面自己整理成该有的样子。**
 
-按颜色 / 按功能一键重排全部图标 · 备份精确到每一个图标 · LSPosed 模块
+按颜色 / 按功能一键重排全部图标 · 备份精确到每一个图标 · **同一个 APK 通吃小米与真我** · LSPosed 模块
 
-[![Release](https://img.shields.io/badge/release-0.14.1-4F46E5)](https://github.com/Cobylinweiqi/Deskly/releases/latest)
+[![Release](https://img.shields.io/badge/release-0.16.3-4F46E5)](https://github.com/Cobylinweiqi/Deskly/releases/latest)
 [![Stars](https://img.shields.io/github/stars/Cobylinweiqi/Deskly?label=stars&color=4F46E5)](https://github.com/Cobylinweiqi/Deskly/stargazers)
 [![Android](https://img.shields.io/badge/Android-8.0%2B-3DDC84?logo=android&logoColor=white)](#环境要求)
 [![LSPosed](https://img.shields.io/badge/LSPosed-API%20101-7F5AF0)](https://github.com/LSPosed/LSPosed)
 
 **[⬇️ 下载最新版](https://github.com/Cobylinweiqi/Deskly/releases/latest)** ·
 **[📖 使用步骤](#使用步骤)** ·
+**[🤖 支持的桌面](#支持的桌面与兼容状态)** ·
 **[❓ 常见问题](docs/技术内幕.md)** ·
 **[☕ 请作者喝咖啡](#请作者喝咖啡)**
 
@@ -33,14 +34,16 @@
 
 ## 它解决什么问题
 
-小米桌面只能手动拖。图标一多，就得一个一个往文件夹里塞；换个主题、装几个新应用，桌面又乱了。
+小米、真我桌面都只能手动拖。图标一多，就得一个一个往文件夹里塞；换个主题、装几个新应用，桌面又乱了。
 
 Deskly 做两件事：
 
 1. **整张桌面按一个规则重排**——把全部图标按「颜色」或「功能」分类，自动建成文件夹、自动分屏，一次写完；
 2. **改坏了能退回去**——每次动手前自动拍快照，备份精确到「哪个图标在哪个文件夹、文件夹在第几屏第几格」，恢复是整库覆盖。
 
-它**不是**通过无障碍服务模拟拖拽，而是直接读写桌面自己的布局数据库（`launcher4x6.db`），所以速度快、结果稳定，也不会在你手上抢焦点。
+它**不是**通过无障碍服务模拟拖拽，而是直接读写桌面自己的布局数据库（小米常见 `launcher4x6.db`，真我实测是私有表名的库），所以速度快、结果稳定，也不会在你手上抢焦点。
+
+> **0.16.0 起不再分机型出包**：同一个 APK 同时支持小米 / HyperOS 与真我 realme UI / ColorOS。启动时按**桌面数据库的结构**自动判方言，不靠机型名、不靠 build 指纹。
 
 ---
 
@@ -49,17 +52,39 @@ Deskly 做两件事：
 | 功能 | 说明 |
 |---|---|
 | **按颜色分类** | 把图标 rasterize 成小图，按主色归到 12 个色系，色系再合成文件夹 |
-| **按功能分类** | 按包名与系统标记分到 通讯 / 社交 / 影音 / 摄影 / 工具 / 金融 / 出行 / 购物 / 办公 / 游戏 / 系统 等组 |
+| **按功能分类** | 精确包名表 + 中文应用名 + 包名功能段 + 系统 `category` 多级兜底，分到 通讯 / 社交 / 影音 / 摄影 / 工具 / 金融 / 出行 / 购物 / 办公 / 游戏 / 系统 等组 |
+| **跨 ROM 方言自适应** | 自动探测布局表名、`itemType` 枚举、文件夹枚举、屏表与排序列、首屏编号、文件夹占几格；小米分支保持既有行为不变 |
 | **方案卡片可点选** | 两套方案并排显示，选中立刻按它重算分组与屏位 |
-| **分屏预览** | 每个文件夹落在第几屏、第几格先给你看；点屏号可以手动钉到某一屏 |
+| **分屏预览** | 每个文件夹落在第几屏、第几格先给你看；点屏号可以手动钉到某一屏；每屏容量按探测到的网格算，不再写死 6 个 |
 | **锁定屏** | 指定几屏原地不动，整理时只重排其余屏；锁定屏按顺序压缩屏号，新文件夹从其后开始 |
 | **第一屏留空** | 想保留第一屏只放小组件，勾一下即可 |
 | **每屏从左上角密排** | 不做「见缝插针」，填满一行再换行 |
 | **精细归位** | 不动整体结构，只把散落和放错的图标挪进合适的文件夹，每条可改可取消 |
 | **自动快照** | 写入前自动存一份，出问题随时退回 |
 | **备份与恢复** | 每份备份可展开到每个图标；恢复直接覆盖，不再额外备份 |
+| **可复制的诊断** | 状态行输出布局表 / 屏表 / itemType 直方图 / 全表清单 / 写回后 screen 分布，长按复制即可给 issue 定位跨 ROM 问题 |
 | **运行引导** | LSPosed / 作用域 / root / 重启桌面 / 电池优化，能查的写清状态，查不到的直说 |
 | **关于** | 版本号 / 作者 / GitHub 反馈入口 / 免责声明 / 捐赠，四行看完 |
+
+---
+
+## 支持的桌面与兼容状态
+
+Deskly 在 LSPosed 里按**桌面包名**挂作用域，推荐列表会自动列出手机上已安装的受支持桌面。一个 APK 装到哪台机器，就按那台机器桌面库的结构选方言。
+
+| ROM / 桌面 | 作用域包名 | 状态 |
+|---|---|---|
+| **小米 MIUI / HyperOS** | `com.miui.home` | ✅ **已实测**（Xiaomi `2509FPN0BC`，HyperOS / Android 17），整理、分屏、备份恢复全链路可用 |
+| **真我 realme UI** | `com.android.launcher`（真机实测包名） | 🧪 **已适配，实验性**：图标读取、移动屏幕、建分类文件夹已可用；**分屏写回仍在真机复核**（见下方说明） |
+| ColorOS / OPPO / 一加 | `com.oppo.launcher`、`com.coloros.launcher`、`com.oplus.launcher`、`com.realme.launcher` | 🧪 同一套 Launcher3 方言，按库结构自适应，未逐款实测 |
+| AOSP Launcher3 | `com.android.launcher3` | 🧪 同上 |
+| 其它桌面（三星 / 华为 EMUI 等） | — | ❌ 未适配，布局库结构不同，请勿直接应用方案 |
+
+**方言怎么判**：不是读机型名，而是看库里有什么——布局表名、各 `itemType` 的行数与是否带 `intent`、哪些行被别的行用 `container` 指成文件夹、屏表 `_id` 与排序列、桌面行 `screen` 的分布、文件夹坐标是占 1 格还是 2×2。所以同一品牌不同版本、厂商改了私有表名或枚举，也不需要专门写死一套规则。
+
+> **真我用户请注意（诚实说明现状）**：真我上「方案预览 2 屏、桌面最终仍只显示 1 屏」的问题，0.16.3 已按屏表 `_id` 映射屏号、按数据反查私有屏表、用模板行补屏修过，但**修复后的真机回执还没拿到**。装上新版后如果发现仍是一屏，请在「重新分析」里**长按复制整段诊断文字**并发到 [Issues](https://github.com/Cobylinweiqi/Deskly/issues)（含全表清单、屏表行、写回后 screen 分布），我按真实库结构继续收敛。另外厂商预装应用的分类词典也还在按真机名单补齐，落进「其它」的应用名同样欢迎回传。
+>
+> 跨 ROM 写入属于高风险操作，**动手前请务必先点一次「备份当前桌面」**。
 
 ---
 
@@ -68,26 +93,30 @@ Deskly 做两件事：
 | 项 | 要求 |
 |---|---|
 | 系统 | Android 8.0（API 26）及以上 |
-| 桌面 | **小米桌面 `com.miui.home`**（MIUI / HyperOS）。其它 ROM 的布局库结构不同，**未适配**，不要直接使用 |
-| 框架 | [LSPosed](https://github.com/LSPosed/LSPosed)（基于 [libxposed API 101](https://libxposed.github.io/api/)），需在模块里启用并勾选作用域 |
-| 权限 | **root**（Magisk / KernelSU / APatch）。读写桌面数据库、备份与恢复全部依赖 root |
+| 桌面 | [上表](#支持的桌面与兼容状态)中列出的桌面包名；其它 ROM 未适配，不要直接应用方案 |
+| 框架 | [LSPosed](https://github.com/LSPosed/LSPosed)（基于 [libxposed API 101](https://libxposed.github.io/api/)），需在模块里启用并勾选**本机实际的桌面** |
+| 权限 | **root**（Magisk / KernelSU / APatch）。读写桌面数据库、备份与恢复全部依赖 root；Magisk 里找不到授权请求时，去**「超级用户列表」**手动添加 Deskly |
 | 不需要 | 无障碍服务、Xposed 之外的特殊权限、联网 |
 
-> 已在 Xiaomi 2509FPN0BC（HyperOS）上实测。换机型 / 换 ROM 前请务必先手动备份一次桌面。
+> 小米路径已在 Xiaomi `2509FPN0BC`（HyperOS）上实测；真我路径在朋友设备上完成了多轮真机诊断与写入验证。换机型 / 换 ROM 前请务必先手动备份一次桌面。
 
 ---
 
 ## 安装
 
-1. 到 **[Releases](https://github.com/Cobylinweiqi/Deskly/releases/latest)** 下载最新的 `Deskly-x.y.z.apk`；
+1. 到 **[Releases](https://github.com/Cobylinweiqi/Deskly/releases/latest)** 下载最新的 `Deskly-x.y.z.apk`（或在 LSPosed 客户端「在线仓库」搜 Deskly 直接更新）；
 2. 安装（系统会提示「未知来源」，允许即可）；
 3. 打开 **LSPosed 管理器 → 模块 → Deskly**，打开开关；
-4. 同一页的**作用域**里勾选「**小米桌面**」（`com.miui.home`）；
-5. 在 **Magisk / KernelSU** 里给 Deskly 授予 **root**；
+4. 同一页的**作用域**里勾选你手机上**实际的桌面**：
+   - 小米 / HyperOS → **小米桌面** `com.miui.home`
+   - 真我 realme UI → **系统桌面** `com.android.launcher`
+   - ColorOS / OPPO / 一加 → 对应的 `com.oppo.launcher` / `com.coloros.launcher` / `com.oplus.launcher`
+   - 推荐应用列表里没有时，用 LSPosed 的搜索直接按包名找；确实不在列表里说明该桌面未适配，先别应用方案；
+5. 在 **Magisk / KernelSU** 里给 Deskly 授予 **root**（看不到请求就去「超级用户列表」手动加）；
 6. 回到 Deskly → 底部切到 **「配置」** → 展开 **「运行引导」**，按 1~5 步走一遍（第 4 步「重启桌面」必须点一次，模块只在桌面进程启动时注入）；
 7. 一切就绪后回到 **「整理」**，开始用。
 
-> 覆盖升级不需要重新勾作用域。**更新 Deskly 后建议重启一次桌面**，否则桌面进程里跑的还是旧版模块。
+> 覆盖升级不需要重新勾作用域。**更新 Deskly 后建议重启一次手机**，否则桌面进程里跑的还是旧版模块。
 
 ---
 
@@ -103,6 +132,7 @@ Deskly 做两件事：
 2. **选方案**：并排两张卡，**方案一按颜色**、**方案二按功能**。点哪张就用哪张，下面的分组与屏位立刻重算；
    - 预览里每个文件夹是一块，每行显示 7 个图标，超过 7 个可以「展开全部 N 个」；
    - 点文件夹右侧的**屏号**，可以把它钉到指定的一屏；勾「第一屏留空」则第一屏只放小组件；
+   - 每屏能放几个文件夹，按**这台桌面实际的网格**算（小米部分版本是 1 格 / 一屏 24 个，旧版误按 2×2 / 一屏 6 个），摘要里会写「文件夹占 N×N · 每屏可放 M 个」；
 3. **写入**：底栏的「应用方案」始终可点，滚到哪儿都在。写入前会自动拍一份快照；写完后桌面自动重启一次，布局立刻生效。
 
 状态行会给出回读证据，例如：
@@ -115,7 +145,11 @@ Deskly 做两件事：
 
 > **分析范围是「桌面上已有的图标」**（含文件夹内）。装了但没放到桌面上的应用，Deskly 不会自动加进来——它只重排已有条目。差多少个，界面上会直接写出来。
 
-### 二、配置页
+### 二、跨 ROM 遇到问题怎么反馈
+
+「重新分析」后的状态行诊断文字**可以长按复制**，里面有布局表名、方言、屏表与排序列、首屏编号、`itemType` 直方图、全表清单、`screen` 分布；「应用方案」的回执还会给出写回后的分布与文件夹行回读数。提 Issue 时把这两段贴上来，比截图、机型描述有用得多。
+
+### 三、配置页
 
 - **运行引导**（默认折叠）：5 步接入清单，每步带一个能直接点的动作。作用域那一步框架没有查询接口，只能自己确认，界面会如实说明，不假装打勾。收起时只报一句 `5 步接入 · root 已就绪 / root 未授权`——五步里有两步本来就无法自动确认，算"就绪 N/5"只会给出一个假的分母。
 - **备份与恢复**（默认折叠）：
@@ -131,7 +165,7 @@ Deskly 做两件事：
 本项目是**第三方模块**，不是 LSPosed 官方项目。它与官方的关系只有技术依赖：
 
 - 模块基于 [libxposed](https://github.com/libxposed/api) 的 **API 101** 开发，描述文件（`META-INF/xposed/module.prop`）遵循其规范；
-- 作用域声明在 [`app/src/main/resources/META-INF/xposed/scope.list`](app/src/main/resources/META-INF/xposed/scope.list)，默认 `com.miui.home`；
+- 推荐作用域声明在 [`app/src/main/resources/META-INF/xposed/scope.list`](app/src/main/resources/META-INF/xposed/scope.list)，覆盖小米 `com.miui.home` 与真我 / ColorOS 系的 6 个桌面包名；`staticScope=false`，用户仍可在管理器里自由增删；
 - 运行需要 [LSPosed](https://github.com/LSPosed/LSPosed) 框架。
 
 > 关于上架 LSPosed 在线模块库（[modules.lsposed.org](https://modules.lsposed.org)）：包名已按官方要求改为 `io.github.cobylinweiqi.deskly`，并提交到 [Xposed-Modules-Repo](https://github.com/Xposed-Modules-Repo)。收录后可直接在 LSPosed 客户端的「在线仓库」里搜到、一键安装与更新。提交与发版备忘见 [docs/上架官方模块库.md](docs/上架官方模块库.md)。
@@ -149,6 +183,9 @@ echo "sdk.dir=/path/to/Android/sdk" > local.properties
 
 ./gradlew assembleRelease
 # 产物：app/build/outputs/apk/release/app-release.apk
+
+# 跨 ROM 回归测试（小米 / ColorOS / 真我私有枚举 / 屏表 / 分类 / 作用域）
+./scripts/test.sh
 ```
 
 `release` 用本机的 `~/.android/debug.keystore` 签名，目的是让升级安装不会因签名不同被拒——**这份 APK 不适合上架任何应用商店**，请自行换签名后再分发。
@@ -161,8 +198,10 @@ echo "sdk.dir=/path/to/Android/sdk" > local.properties
 - 提示「整理失败」但桌面其实整理好了？
 - 文件夹没落在钉住的那一屏？
 - 提示没有 root / 读不到桌面数据库？
+- **真我 / ColorOS：预览分了 2 屏，桌面最后只有 1 屏？**
+- **很多应用落到「其它」、或者压根没进文件夹？**
 
-这些都在 **[docs/技术内幕.md](docs/技术内幕.md)** 里按现象分了类，含实测数据、根因与修复版本。遇到问题先搜一眼，提 Issue 时请带上**版本号（左上角 banner 右侧）**与现象截图。
+这些都在 **[docs/技术内幕.md](docs/技术内幕.md)** 里按现象分了类，含实测数据、根因与修复版本。遇到问题先搜一眼，提 Issue 时请带上**版本号（左上角 banner 右侧）**、机型与 ROM、**「重新分析」的完整诊断文字**与现象截图。
 
 ---
 
@@ -170,12 +209,13 @@ echo "sdk.dir=/path/to/Android/sdk" > local.properties
 
 > **请完整阅读后再使用。**
 
-1. 本项目会**直接修改系统桌面的布局数据库**（`/data/user_de/0/com.miui.home/databases/launcher4x6.db`），属于高风险操作。**使用前请自行备份重要数据**，并确认你愿意承担相应风险。
+1. 本项目会**直接修改系统桌面的布局数据库**（小米常见 `/data/user_de/0/com.miui.home/databases/launcher4x6.db`，真我与 ColorOS 的路径、表名各不相同），属于高风险操作。**使用前请自行备份重要数据**，并确认你愿意承担相应风险。
 2. 本项目按「现状」提供，**不附带任何明示或暗示的担保**，包括但不限于可用性、无错误、适用于特定目的。因使用或无法使用本项目导致的**桌面布局错乱、图标丢失、数据损坏、设备异常、时间损失或任何间接损失**，作者**不承担任何责任**。
 3. root、LSPosed、系统修改本身可能使设备**失去保修**、触发安全风控或影响部分应用（如银行、支付类）的正常使用。这些后果由使用者自行判断与承担。
-4. 本项目**不收集任何数据**、不联网、不含统计与广告 SDK。所有操作都在你的设备本地完成。
-5. 本项目与小米（Xiaomi）、MIUI / HyperOS、LSPosed 官方**均无隶属或背书关系**，相关名称与商标归各自权利人所有。
-6. 若你不同意上述任何一条，请**立即停止使用并卸载**。
+4. **真我 / ColorOS / OPPO 分支为实验性适配**：厂商可随时更换布局库结构或改走非 SQLite 存储，跨 ROM 使用前请先备份，并留意 [支持的桌面与兼容状态](#支持的桌面与兼容状态) 里的已知限制。
+5. 本项目**不收集任何数据**、不联网、不含统计与广告 SDK。所有操作都在你的设备本地完成。
+6. 本项目与小米（Xiaomi）、MIUI / HyperOS、realme、OPPO / ColorOS、LSPosed 官方**均无隶属或背书关系**，相关名称与商标归各自权利人所有。
+7. 若你不同意上述任何一条，请**立即停止使用并卸载**。
 
 ---
 
