@@ -35,6 +35,13 @@ public final class DesktopModel {
     public static final int TYPE_SHORTCUT = 14;
     public static final int TYPE_GROUP = 19;
     public static final int TYPE_FOLDER = 21;
+    /**
+     * HyperOS 4 的「小文件夹」（1×1）。真机日志里同一条桌面会把两种文件夹分别读成
+     * {@code ItemType.userFolder(2)} 与 {@code ItemType.folder_2X2_4(21)}，
+     * 前者按 {@code (0,0,1-1)}、后者按 {@code (0,2,2-2)} 摆放。
+     * 也就是说文件夹尺寸编码在 itemType 上，光改 spanX/spanY 桌面不认。
+     */
+    public static final int TYPE_FOLDER_SMALL = 2;
 
     /** 小米文件夹打开后是 4 列。用来给新成员算建议行号。 */
     public static final int FOLDER_COLUMNS = 4;
@@ -148,7 +155,12 @@ public final class DesktopModel {
     public int screenCount;
     /** favorites 表里的总行数，用来在界面上核对"读到的确实是这个库"。 */
     public int totalItems;
-    /** 桌面上文件夹占几格（1 或 2）。排屏、写回、预览共用这一份，见 {@link #detectFolderSpan}。 */
+    /**
+     * 桌面上文件夹占几格（1 或 2）。排屏、写回、预览共用这一份，见 {@link #detectFolderSpan}。
+     *
+     * <p>读库刚出来时可能是 0（没有可信样本）；界面会用 {@link PlanConfig#effectiveFolderSpan(int)}
+     * 把它替换成最终生效值后再传给 {@link DeskPlan}。手工构造的 model 默认 1。
+     */
     public int folderSpan = 1;
 
     public Folder folderById(int id) {
@@ -315,17 +327,39 @@ public final class DesktopModel {
      * 桌面上却全挤在第 1 屏，就是这么来的。坐标是桌面自己写回来的，最可信：
      * 同一屏同一行出现相邻 cellX（差 1），或一行超过 2 个文件夹，就是 1 格网格。
      *
-     * <p>没有足够样本时退回 span 众数；一个文件夹都没有时默认 1（现代桌面）。
+     * <p><b>0.16.4：两种此前会出事的情形，现在一律返回 0（证据不足）</b>
+     * <ol>
+     *   <li>桌面原本一个文件夹都没有。旧版直接默认 1；若这台机器按 2×2 大文件夹渲染，
+     *       写进去的相邻坐标会让方块互相压住（「有些小米文件夹堆在一起」就是这么来的）。
+     *       现在交给 {@link PlanConfig#effectiveFolderSpan(int)} 保守按 2 处理。</li>
+     *   <li>整批文件夹是<b>我们上次写回的产物</b>：内置组名 + 严格 1 格密排。旧版读到
+     *       自己写的相邻坐标又判成 1，一次猜错就永久固化。现在这类布局不作为证据，
+     *       改由「上次写回校验值」定夺。</li>
+     * </ol>
+     *
+     * @return 1 / 2，或 0 表示没有可信样本
      */
-    private static int detectFolderSpan(List<Folder> folders) {
+    static int detectFolderSpan(List<Folder> folders) {
         int big = 0;
         int small = 0;
+        int topLevel = 0;
+        boolean allBuiltin = true;
         Map<String, List<Integer>> byRow = new LinkedHashMap<>();
         for (Folder f : folders) {
             if (f.container >= 0) {
                 continue;
             }
-            if (Math.max(f.spanX, f.spanY) >= 2) {
+            topLevel++;
+            if (!AppClassifier.isBuiltinGroup(f.title)) {
+                allBuiltin = false;
+            }
+            // 0.16.6：先认 itemType。HyperOS 4 用 2=小文件夹、21=2×2 大文件夹，
+            // 尺寸写在这里而不是 span 上；只按 span 判会把「小文件夹」当成坐标异常。
+            if (f.itemType == TYPE_FOLDER) {
+                big++;
+            } else if (f.itemType == TYPE_FOLDER_SMALL) {
+                small++;
+            } else if (Math.max(f.spanX, f.spanY) >= 2) {
                 big++;
             } else {
                 small++;
@@ -337,6 +371,13 @@ public final class DesktopModel {
                 byRow.put(key, xs);
             }
             xs.add(f.cellX);
+        }
+        if (topLevel == 0 || looksSynthetic(folders, allBuiltin, byRow)) {
+            return 0;
+        }
+        // 只有一个小文件夹时，既没有坐标间距也没有 span 证据，别急着判 1 格网格
+        if (topLevel < 2) {
+            return big > small ? 2 : 0;
         }
         for (List<Integer> xs : byRow.values()) {
             if (xs.size() > 2) {
@@ -351,6 +392,44 @@ public final class DesktopModel {
             }
         }
         return big > small ? 2 : 1;
+    }
+
+    /**
+     * 是不是「上次按 1 格步长从左上角密排写出来的」布局。
+     *
+     * <p>三个条件同时成立才认定：整批都是 Deskly 内置组名、每个文件夹都写成 1×1、
+     * 且同屏同行出现相邻 cellX。用户手工摆的文件夹极少同时满足这三条；而按 2×2
+     * 写回的布局因为 span=2 也不会命中，所以小米 0.14.1 的既有探测不受影响。
+     */
+    private static boolean looksSynthetic(List<Folder> folders, boolean allBuiltin,
+                                          Map<String, List<Integer>> byRow) {
+        if (!allBuiltin || folders.isEmpty()) {
+            return false;
+        }
+        boolean adjacent = false;
+        for (List<Integer> xs : byRow.values()) {
+            if (xs.size() < 2) {
+                continue;
+            }
+            java.util.Collections.sort(xs);
+            for (int i = 1; i < xs.size(); i++) {
+                if (xs.get(i) - xs.get(i - 1) == 1) {
+                    adjacent = true;
+                }
+            }
+        }
+        if (!adjacent) {
+            return false;
+        }
+        for (Folder f : folders) {
+            if (f.container >= 0) {
+                continue;
+            }
+            if (Math.max(f.spanX, f.spanY) >= 2) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /** 读的过程中用于暂存"成员先到、文件夹后到"的情况。 */

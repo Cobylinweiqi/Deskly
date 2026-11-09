@@ -96,7 +96,9 @@ public class MainActivity extends Activity {
                 findViewById(R.id.tvPlanSummary),
                 findViewById(R.id.screenContainer),
                 findViewById(R.id.lockContainer),
-                findViewById(R.id.cbKeepWidgets));
+                findViewById(R.id.cbKeepWidgets),
+                findViewById(R.id.spanContainer),
+                findViewById(R.id.tvSpanHint));
 
         desktop = new DesktopSection(this, target, pageOrganize, plan);
 

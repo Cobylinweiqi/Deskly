@@ -12,6 +12,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
 
 /**
  * 「整理全部图标」的落地方案：把所有应用图标按当前预设重新分组，并算出每个文件夹
@@ -25,11 +26,47 @@ import java.util.Set;
  * <p>排布完全复用 {@link LayoutPlan}：界面预览说第 3 屏，写进去就必须是第 3 屏，
  * 两套算法各算一遍迟早会对不上。
  *
+ * <p><b>0.16.5：不重叠是硬约束，不是"尽量"。</b>{@link LayoutPlan} 只决定"第几屏、
+ * 第几个候选位"，最后落到 {@code cellX/cellY} 之前还要过一遍 {@link #placeBuckets}：
+ * 按桌面实际留下的小组件、旧文件夹占位、4×6 网格边界逐个避让，一个屏放不下就往后开新屏。
+ * 写库层还会再校验一次，发现重叠直接中止，绝不肯把一份会叠在一起的布局灌进真库。
+ *
  * <p>不参与整理的东西：热区图标（底部固定栏）、小组件与组件（itemType=19 等）。
  * 前者是刻意固定的入口，后者塞不进文件夹——它们原地不动，所以「第一屏留空」实际是
  * 「第一屏只留小组件，不摆应用图标」，这一点在界面上要如实说，不能让用户以为整屏会被清空。
  */
 public final class DeskPlan {
+
+    /** 一个占格矩形。屏号统一用内存里的 1 起编号，写库时才由 LauncherProfile 换算。 */
+    public static final class Rect {
+        public final int screen;
+        public final int x;
+        public final int y;
+        public final int w;
+        public final int h;
+
+        public Rect(int screen, int x, int y, int w, int h) {
+            this.screen = screen;
+            this.x = x;
+            this.y = y;
+            this.w = Math.max(1, w);
+            this.h = Math.max(1, h);
+        }
+
+        /** 两个矩形有没有共用任何一格。 */
+        public boolean intersects(Rect o) {
+            return o != null && screen == o.screen
+                    && x <= o.x + o.w - 1 && x + w - 1 >= o.x
+                    && y <= o.y + o.h - 1 && y + h - 1 >= o.y;
+        }
+
+        /** 有没有越出 4×6 网格。越界的坐标桌面会自己挪，挪完就可能和别人叠在一起。 */
+        public boolean inGrid() {
+            return x >= 0 && y >= 0
+                    && x + w <= LayoutPlan.COLUMNS
+                    && y + h <= LayoutPlan.ROWS;
+        }
+    }
 
     /** 一个即将存在的文件夹。 */
     public static final class Bucket {
@@ -62,7 +99,7 @@ public final class DeskPlan {
      */
     public final Map<String, Integer> reusable = new LinkedHashMap<>();
     /**
-     * 屏号 → 这一屏还能用的文件夹候选位（默认 6 个全能用）。
+     * 屏号 → 这一屏还能用的文件夹候选位（默认全能用）。
      *
      * <p>桌面上的小组件会整块占住格子。真机第 1 屏摆了一个 4×2 的日历，把 (0,0) 和 (2,0)
      * 两个位置压掉了。这里记的是<b>具体哪几个位不能用</b>，而不是"这一屏少放两个"——
@@ -108,6 +145,16 @@ public final class DeskPlan {
     /** 锁定屏上原地保留的文件夹 id，写入时绝不能删。 */
     public final Set<Integer> keptFolderIds = new HashSet<>();
 
+    /**
+     * 0.16.5：删不掉、又没被本次分组复用的旧文件夹。
+     *
+     * <p>它们里面有非应用成员（小米「工具」文件夹里那个 itemType=1 的「查找」入口），
+     * 写库层会保护它们不删。旧版让它们留在原来的 screen/cellX/cellY 上，而新方案恰恰
+     * 是从每屏左上角开始排——于是新旧两个文件夹占同一格，「有些小米文件夹堆在一起」
+     * 有一部分就是这么来的。现在整体挪到所有新文件夹之后的最后一屏，内容一点不丢。
+     */
+    public final Set<Integer> strayFolderIds = new LinkedHashSet<>();
+
     /** 未锁定屏的小组件是否保留（true=挪到最后一屏，false=删除）。 */
     public boolean keepOrphanWidgets = true;
 
@@ -125,6 +172,42 @@ public final class DeskPlan {
 
     /** 文件夹占几格，由读库时从现有文件夹坐标探测。排屏与写库必须共用它。 */
     public int folderSpan = 2;
+
+    // ───────────────────────── 不重叠校验 ─────────────────────────
+
+    /**
+     * 屏号 → 桌面上会一直占着格的矩形（小组件等）。
+     * 预览的可用候选位、最终排位、写库前的校验都读这一份，保证三方说的是同一件事。
+     */
+    public final Map<Integer, List<Rect>> obstacles = new LinkedHashMap<>();
+
+    /** 最终排位里重叠的文件夹对数；正常必须为 0。 */
+    public int overlapCount;
+
+    /** 为了避开小组件 / 旧文件夹 / 边界而挪过位置的文件夹数，只用于回执说明。 */
+    public int adjustedCount;
+
+    /** 数一遍矩形两两相交的对数，公开给写库层与单测做硬校验。 */
+    public static int countOverlaps(List<Rect> rects) {
+        int n = 0;
+        for (int i = 0; i < rects.size(); i++) {
+            for (int j = i + 1; j < rects.size(); j++) {
+                if (rects.get(i).intersects(rects.get(j))) {
+                    n++;
+                }
+            }
+        }
+        return n;
+    }
+
+    /** 给状态行 / 确认框用的一句话。 */
+    public String placementNote() {
+        if (overlapCount > 0) {
+            return "⚠ 检出 " + overlapCount + " 对文件夹位置重叠，请重新分析";
+        }
+        String s = "已校验：文件夹之间、与小组件之间均不重叠";
+        return adjustedCount > 0 ? s + "（自动避让 " + adjustedCount + " 处）" : s;
+    }
 
     public int memberCount() {
         int n = 0;
@@ -151,9 +234,30 @@ public final class DeskPlan {
     public static DeskPlan build(Context ctx, DesktopModel model, AppClassifier.Scheme scheme,
                                  boolean firstScreenBlank, Map<String, Integer> pins,
                                  Set<Integer> lockedScreens, boolean keepOrphanWidgets) {
+        return build(ctx, model, scheme, firstScreenBlank, pins, lockedScreens,
+                keepOrphanWidgets, 0);
+    }
+
+    /**
+     * 0.16.5：调用方<b>显式</b>把生效占位传进来。
+     *
+     * <p>以前只有预览这条路径会调 {@code model.folderSpan = plan.folderSpan()}；真正写库的
+     * {@code DesktopSection#doApply} 会为了防用户刚拖过图标而重读一次桌面，那份 fresh model
+     * 带着的是<b>探测原始值</b>，于是用户在界面上选的「小 1×1 / 大 2×2」在写进去时被悄悄丢掉：
+     * 预览按 2×2 排、写入按 1×1 密排，桌面按 2×2 渲染就是一堆方块互相压住。
+     * 现在把生效值作为参数传进来，谁都不能假装没看见。
+     *
+     * @param effectiveFolderSpan 1 / 2 时以它为准；0 表示沿用 model 的探测值（老调用方）。
+     */
+    public static DeskPlan build(Context ctx, DesktopModel model, AppClassifier.Scheme scheme,
+                                 boolean firstScreenBlank, Map<String, Integer> pins,
+                                 Set<Integer> lockedScreens, boolean keepOrphanWidgets,
+                                 int effectiveFolderSpan) {
         DeskPlan plan = new DeskPlan();
         plan.profile = model.profile;
-        plan.folderSpan = model.folderSpan > 0 ? model.folderSpan : 2;
+        plan.folderSpan = effectiveFolderSpan == 1 || effectiveFolderSpan == 2
+                ? effectiveFolderSpan
+                : (model.folderSpan > 0 ? model.folderSpan : 2);
         plan.oldFolderCount = model.folders.size();
         plan.keepOrphanWidgets = keepOrphanWidgets;
 
@@ -259,7 +363,9 @@ public final class DeskPlan {
         plan.readRows = model.totalItems;
         plan.skippedRows = Math.max(0, model.totalItems - apps.size());
         if (apps.isEmpty()) {
-            // 没有可整理的图标：锁定屏照样压缩屏号，小组件按策略安置
+            // 没有可整理的图标：锁定屏照样压缩屏号，小组件按策略安置，
+            // 删不掉的旧文件夹也整体挪到最后一屏，别留在中间屏占位
+            collectStrayFolders(plan, model, remap, Collections.emptySet());
             plan.screenCount = settle(plan, plan.lockedCount);
             return plan;
         }
@@ -291,10 +397,21 @@ public final class DeskPlan {
             });
         }
 
+        // 哪些旧文件夹这次真的会被复用（标题命中了新组名），其余删不掉的搬到最后一屏
+        Set<Integer> reusedIds = new HashSet<>();
+        for (String g : grouped.keySet()) {
+            Integer id = plan.reusable.get(g);
+            if (id != null) {
+                reusedIds.add(id);
+            }
+        }
+        collectStrayFolders(plan, model, remap, reusedIds);
+
         // 3) 排屏：转成 LayoutPlan 认识的形状，直接用同一份算法。
         //    先把小组件挡掉的格位算出来——不传这个，第 1 屏就会排出 6 个文件夹，
         //    和那个 4×2 的日历叠在一起。
-        plan.slots.putAll(slotsOf(plan.stayPut, plan.folderSpan));
+        collectObstacles(plan);
+        plan.slots.putAll(freeSlots(plan.obstacles, plan.folderSpan));
         Map<String, List<AppEntry>> forPlan = new LinkedHashMap<>();
         for (Map.Entry<String, List<DesktopModel.Item>> e : grouped.entrySet()) {
             List<AppEntry> fake = new ArrayList<>(e.getValue().size());
@@ -306,7 +423,7 @@ public final class DeskPlan {
         LayoutPlan layout = LayoutPlan.build(
                 forPlan, firstScreenBlank, pins, plan.slots, plan.lockedCount, plan.folderSpan);
 
-        // 4) 屏幕内序号 → 2×2 格位。每屏 6 个文件夹，按 2 列 3 行铺。
+        // 4) 屏幕内序号 → 格位。然后交给 placeBuckets 做最终的避让与不重叠校验。
         Map<String, Bucket> byGroup = new LinkedHashMap<>();
         for (Map.Entry<String, List<DesktopModel.Item>> e : grouped.entrySet()) {
             Bucket b = new Bucket(e.getKey());
@@ -314,7 +431,6 @@ public final class DeskPlan {
             byGroup.put(e.getKey(), b);
             plan.buckets.add(b);
         }
-        int maxScreen = 0;
         for (LayoutPlan.Screen s : layout.screens) {
             int idx = 0;
             for (LayoutPlan.Folder lf : s.folders) {
@@ -328,108 +444,234 @@ public final class DeskPlan {
                 b.cellX = LayoutPlan.cellX(slot, plan.folderSpan);
                 b.cellY = LayoutPlan.cellY(slot, plan.folderSpan);
                 idx++;
-                if (s.number > maxScreen) {
-                    maxScreen = s.number;
-                }
             }
         }
-        // 没排上的（理论上不会有）兜底放在最后，避免它们凭空消失
+        // 没排上的（理论上不会有）统一交给 placeBuckets 从起始屏开始找空位，
+        // 旧版在这里给它们全塞 maxScreen+1 屏的 (0,0)，多个组就会叠成一摞。
         for (Bucket b : plan.buckets) {
             if (b.screen <= 0) {
-                b.screen = maxScreen + 1;
-                b.cellX = 0;
-                b.cellY = 0;
-                maxScreen = b.screen;
+                b.screen = plan.startScreen;
             }
         }
-        plan.screenCount = settle(plan, maxScreen);
+        int highest = placeBuckets(plan);
+        plan.screenCount = settle(plan, highest);
         return plan;
     }
 
+    // ───────────────────────── 不重叠排位 ─────────────────────────
+
+    /** 某屏第 slot 个候选位对应的文件夹矩形。 */
+    private static Rect rectAt(int screen, int slot, int span) {
+        return new Rect(screen, LayoutPlan.cellX(slot, span), LayoutPlan.cellY(slot, span),
+                span, span);
+    }
+
+    private static boolean intersectsAny(Rect r, List<Rect> list) {
+        if (list == null) {
+            return false;
+        }
+        for (Rect o : list) {
+            if (r.intersects(o)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** 收集桌面上不会被移走、会一直占格的条目（小组件 / 组件）。 */
+    private static void collectObstacles(DeskPlan plan) {
+        for (DesktopModel.Item it : plan.stayPut) {
+            // 文件夹内成员的 screen 是 -1，不在任何屏上；文件夹本体不进 stayPut（见上文）
+            if (it.screen <= 0 || it.isFolder()) {
+                continue;
+            }
+            List<Rect> list = plan.obstacles.get(it.screen);
+            if (list == null) {
+                list = new ArrayList<>();
+                plan.obstacles.put(it.screen, list);
+            }
+            list.add(new Rect(it.screen, it.cellX, it.cellY, it.spanX, it.spanY));
+        }
+    }
+
     /**
-     * 收尾：安置未锁定屏上的小组件，算出最终屏数。
+     * 算每屏还剩下哪些文件夹位：小组件按它自己的 span 盖住候选格，被盖住的位置直接剔掉。
+     *
+     * <p>候选位就是 Launcher 上那 6 个 2×2 的位置，(0,0) (2,0) (0,2) (2,2) (0,4) (2,4)。
+     * 一个 4×2 的日历压掉上面两个，剩下 {0,2,3,4,5}——注意是"剩下这几个具体位置"，
+     * 不是"还剩五个"，两者写进库里的结果完全不同。空数组也要保留：整屏被占满时
+     * 容量必须是 0，不能被 LayoutPlan 当成"没传，用默认 6 个"。
+     */
+    private static Map<Integer, int[]> freeSlots(Map<Integer, List<Rect>> obstacles, int span) {
+        int total = LayoutPlan.slotsForSpan(span);
+        Map<Integer, int[]> out = new LinkedHashMap<>();
+        for (Map.Entry<Integer, List<Rect>> e : obstacles.entrySet()) {
+            int screen = e.getKey();
+            List<Integer> free = new ArrayList<>();
+            for (int i = 0; i < total; i++) {
+                Rect r = rectAt(screen, i, span);
+                if (!r.inGrid() || intersectsAny(r, e.getValue())) {
+                    continue;
+                }
+                free.add(i);
+            }
+            int[] a = new int[free.size()];
+            for (int k = 0; k < a.length; k++) {
+                a[k] = free.get(k);
+            }
+            out.put(screen, a);
+        }
+        return out;
+    }
+
+    /**
+     * 删不掉、又没被复用的旧文件夹，整体挪到最后一屏。
+     *
+     * <p>判据刻意与写库层的 {@code protectedFolders} 保持一致：看成员行的 itemType 是否
+     * 落在本 ROM 的应用枚举里（{@link LauncherProfile#isApp(int)}），而不是用带结构兜底的
+     * {@code Item.isApp()}。两者一旦不一致，就会出现"我们认为它会被删掉、写库却把它留下"，
+     * 于是它继续占着老格子，和新文件夹叠在一起。
+     */
+    private static void collectStrayFolders(DeskPlan plan, DesktopModel model,
+                                            Map<Integer, Integer> remap,
+                                            Set<Integer> reusedIds) {
+        LauncherProfile prof = model.profile;
+        for (DesktopModel.Folder f : model.folders) {
+            if (remap.containsKey(f.screen) || reusedIds.contains(f.id)) {
+                continue;
+            }
+            boolean protectedBody = false;
+            for (DesktopModel.Item m : f.members) {
+                boolean appRow = prof == null
+                        ? (m.itemType == DesktopModel.TYPE_APP
+                        || m.itemType == DesktopModel.TYPE_SHORTCUT)
+                        : prof.isApp(m.itemType);
+                if (!appRow) {
+                    protectedBody = true;
+                    break;
+                }
+            }
+            if (protectedBody) {
+                plan.strayFolderIds.add(f.id);
+            }
+        }
+    }
+
+    /**
+     * 最终排位：按屏号顺序把每个文件夹放进一个真正空着的格子。
+     *
+     * <p>为什么还要再排一遍：{@link LayoutPlan} 只知道"这屏还有几个候选位"，钉屏钉过头、
+     * 旧文件夹残留、候选位数组临时对不上，都可能让它给出一个越界或重复的格位。这里以
+     * <b>矩形相交</b>为准，逐个试候选位；撞上小组件、撞上已放好的文件夹、越出 4×6 网格
+     * 就换下一个位，这一屏没位了就往后开一屏。写出去的坐标因此必然两两不相交。
+     *
+     * @return 实际用到的最大屏号
+     */
+    private static int placeBuckets(DeskPlan plan) {
+        int span = plan.folderSpan;
+        int[] all = LayoutPlan.defaultSlots(span);
+        Map<Integer, List<Rect>> used = new LinkedHashMap<>();
+        for (Map.Entry<Integer, List<Rect>> e : plan.obstacles.entrySet()) {
+            used.put(e.getKey(), new ArrayList<>(e.getValue()));
+        }
+
+        TreeMap<Integer, List<Bucket>> byScreen = new TreeMap<>();
+        for (Bucket b : plan.buckets) {
+            int s = b.screen > 0 ? b.screen : plan.startScreen;
+            List<Bucket> list = byScreen.get(s);
+            if (list == null) {
+                list = new ArrayList<>();
+                byScreen.put(s, list);
+            }
+            list.add(b);
+        }
+
+        int highest = 0;
+        int adjusted = 0;
+        List<Bucket> pending = new ArrayList<>();
+        for (Map.Entry<Integer, List<Bucket>> e : byScreen.entrySet()) {
+            int screen = Math.max(Math.max(e.getKey(), plan.startScreen), highest + 1);
+            pending.addAll(e.getValue());
+            int guard = 0;
+            while (!pending.isEmpty() && guard++ < 512) {
+                int[] slots = plan.slots.containsKey(screen) ? plan.slots.get(screen) : all;
+                int idx = 0;
+                while (idx < slots.length && !pending.isEmpty()) {
+                    Rect r = rectAt(screen, slots[idx++], span);
+                    if (!r.inGrid() || intersectsAny(r, used.get(screen))) {
+                        continue;
+                    }
+                    Bucket b = pending.remove(0);
+                    if (b.screen != screen || b.cellX != r.x || b.cellY != r.y) {
+                        adjusted++;
+                    }
+                    b.screen = screen;
+                    b.cellX = r.x;
+                    b.cellY = r.y;
+                    List<Rect> list = used.get(screen);
+                    if (list == null) {
+                        list = new ArrayList<>();
+                        used.put(screen, list);
+                    }
+                    list.add(r);
+                }
+                if (pending.isEmpty()) {
+                    break;
+                }
+                screen++;
+            }
+            highest = Math.max(highest, screen);
+        }
+
+        plan.adjustedCount = adjusted;
+        List<Rect> rects = new ArrayList<>();
+        for (Bucket b : plan.buckets) {
+            rects.add(new Rect(b.screen, b.cellX, b.cellY, span, span));
+        }
+        plan.overlapCount = countOverlaps(rects);
+        return Math.max(highest, plan.lockedCount);
+    }
+
+    /**
+     * 收尾：安置未锁定屏上的小组件与删不掉的旧文件夹，算出最终屏数。
      *
      * <p>保留时把它们整体挪到最后一屏之后（保持各自 cellX/cellY，只要原来不重叠，
      * 挪过去也不重叠）；清空时记进 {@link #dropIds} 交给写入层删除。
+     * 旧文件夹搬过去后既不会被删，也不再和任何新文件夹抢格子。
      *
      * @param maxScreen 新文件夹占到的最大屏号
      * @return 整理后的总屏数
      */
     private static int settle(DeskPlan plan, int maxScreen) {
         int total = Math.max(maxScreen, plan.lockedCount);
-        if (plan.orphanWidgets.isEmpty()) {
+        boolean needTrailing = !plan.strayFolderIds.isEmpty()
+                || (plan.keepOrphanWidgets && !plan.orphanWidgets.isEmpty());
+        if (!needTrailing) {
+            if (!plan.keepOrphanWidgets) {
+                for (DesktopModel.Item w : plan.orphanWidgets) {
+                    plan.dropIds.add(w.id);
+                }
+            }
             return total;
         }
+        int trailing = total + 1;
         if (plan.keepOrphanWidgets) {
-            int orphanScreen = total + 1;
             for (DesktopModel.Item w : plan.orphanWidgets) {
-                plan.frozenScreens.put(w.id, orphanScreen);
+                plan.frozenScreens.put(w.id, trailing);
             }
-            return orphanScreen;
+        } else {
+            for (DesktopModel.Item w : plan.orphanWidgets) {
+                plan.dropIds.add(w.id);
+            }
         }
-        for (DesktopModel.Item w : plan.orphanWidgets) {
-            plan.dropIds.add(w.id);
+        for (int id : plan.strayFolderIds) {
+            plan.frozenScreens.put(id, trailing);
+            plan.keptFolderIds.add(id);
         }
-        return total;
+        return trailing;
     }
 
     // ───────────────────────── 分组 ─────────────────────────
-
-    /**
-     * 算每屏还剩下哪些文件夹位：小组件按它自己的 span 盖住候选格，被盖住的位置直接剔掉。
-     *
-     * <p>候选位就是 Launcher 上那 6 个 2×2 的位置，(0,0) (2,0) (0,2) (2,2) (0,4) (2,4)。
-     * 一个 4×2 的日历压掉上面两个，剩下 {2,3,4,5}——注意是"剩下这四个具体位置"，
-     * 不是"还剩四个"，两者写进库里的结果完全不同。
-     */
-    private static Map<Integer, int[]> slotsOf(List<DesktopModel.Item> stayPut, int span) {
-        int total = LayoutPlan.slotsForSpan(span);
-        Map<Integer, java.util.Set<Integer>> blocked = new LinkedHashMap<>();
-        for (DesktopModel.Item it : stayPut) {
-            // 文件夹内的组件 screen 是 -1，不在任何屏上，不影响桌面的格位
-            if (it.screen <= 0) {
-                continue;
-            }
-            // 文件夹本体不是障碍物，是这次要被挪走/删掉的东西。
-            // 0.11.1 的调用方已经不再把它塞进 stayPut，这里再挡一道：
-            // 一旦有人又把文件夹放进来，每屏的可用位就会被旧布局切碎，
-            // 新文件夹只能落在旧布局剩下的缝里——用户看到的就是"不是从左上角开始"。
-            if (it.isFolder()) {
-                continue;
-            }
-            int sx = it.cellX;
-            int sy = it.cellY;
-            int ex = sx + Math.max(1, it.spanX) - 1;
-            int ey = sy + Math.max(1, it.spanY) - 1;
-            for (int i = 0; i < total; i++) {
-                int cx = LayoutPlan.cellX(i, span);
-                int cy = LayoutPlan.cellY(i, span);
-                boolean overlap = cx <= ex && cx + span - 1 >= sx
-                        && cy <= ey && cy + span - 1 >= sy;
-                if (overlap) {
-                    java.util.Set<Integer> set = blocked.get(it.screen);
-                    if (set == null) {
-                        set = new java.util.HashSet<>();
-                        blocked.put(it.screen, set);
-                    }
-                    set.add(i);
-                }
-            }
-        }
-        Map<Integer, int[]> out = new LinkedHashMap<>();
-        for (Map.Entry<Integer, java.util.Set<Integer>> e : blocked.entrySet()) {
-            java.util.Set<Integer> b = e.getValue();
-            int[] free = new int[Math.max(0, total - b.size())];
-            int k = 0;
-            for (int i = 0; i < total; i++) {
-                if (!b.contains(i)) {
-                    free[k++] = i;
-                }
-            }
-            out.put(e.getKey(), free);
-        }
-        return out;
-    }
 
     private static String groupByFunction(PackageManager pm, DesktopModel.Item it) {
         // 与方案卡预览共用 AppClassifier.fromDesktop：应用名、category、系统标志只在一处补齐，

@@ -342,6 +342,32 @@
                             android:textColor="@color/text_primary"
                             android:textSize="13sp" />
 
+                        <!-- 0.16.4：桌面把文件夹当 1 格还是 2×2 大文件夹，取决于桌面版本与
+                             「大文件夹」开关。自动探测拿不到样本时给用户一个手动覆盖入口 -->
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="10dp"
+                            android:text="文件夹大小（自动判断不准时可手动指定）"
+                            android:textColor="@color/text_secondary"
+                            android:textSize="12sp" />
+
+                        <LinearLayout
+                            android:id="@+id/spanContainer"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:baselineAligned="false"
+                            android:orientation="horizontal" />
+
+                        <TextView
+                            android:id="@+id/tvSpanHint"
+                            style="@style/CardBody"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="6dp"
+                            android:text="分析后显示判断依据" />
+
                         <TextView
                             android:id="@+id/tvPlanSummary"
                             style="@style/CardBody"

@@ -43,12 +43,21 @@ public final class PlanSection {
     /** 锁定屏的 Chip 容器。 */
     private final LinearLayout lockBox;
     private final CheckBox cbKeepWidgets;
+    /** 0.16.4：文件夹大小的三选 Chip 容器与来源说明。 */
+    private final LinearLayout spanBox;
+    private final TextView tvSpanHint;
 
     private final PlanConfig cfg;
     /** 当前桌面屏数，0 表示还没分析。锁定 Chip 按它生成。 */
     private int screenCount;
-    /** 0.16.3：第二步的方案摘要也要用读库探测到的文件夹占位，别再写死 2×2 / 每屏 6 个。 */
-    private int folderSpan = LayoutPlan.FOLDER_SPAN;
+    /** 读库坐标探测到的原始值：0=没有可信样本、1 / 2=探测结论。 */
+    private int detectedSpan;
+    /**
+     * 0.16.3 起排屏摘要用探测值；0.16.4 改成<b>生效值</b>：手动指定、上次写回校验、
+     * 坐标探测或无样本时的保守默认，统一由 {@link PlanConfig#effectiveFolderSpan(int)} 决定。
+     * 排屏、写回、状态行都读它，不再各猜各的。
+     */
+    private int folderSpan = 2;
     private final Map<Scheme, Row> rows = new EnumMap<>(Scheme.class);
     private final Map<Scheme, Integer> groupCounts = new EnumMap<>(Scheme.class);
 
@@ -71,7 +80,8 @@ public final class PlanSection {
 
     public PlanSection(Activity act, LinearLayout presetBox, CheckBox cbFirstBlank,
                        TextView tvPlanSummary, LinearLayout screenBox,
-                       LinearLayout lockBox, CheckBox cbKeepWidgets) {
+                       LinearLayout lockBox, CheckBox cbKeepWidgets,
+                       LinearLayout spanBox, TextView tvSpanHint) {
         this.act = act;
         this.presetBox = presetBox;
         this.cbFirstBlank = cbFirstBlank;
@@ -79,7 +89,11 @@ public final class PlanSection {
         this.screenBox = screenBox;
         this.lockBox = lockBox;
         this.cbKeepWidgets = cbKeepWidgets;
+        this.spanBox = spanBox;
+        this.tvSpanHint = tvSpanHint;
         this.cfg = PlanConfig.load(act);
+        // 还没分析时不套用探测默认值：等 setFolderSpan 拿到库里的证据再重算
+        this.folderSpan = cfg.effectiveFolderSpan(0);
 
         buildPresets();
 
@@ -112,6 +126,8 @@ public final class PlanSection {
             }
         });
         paintLocks();
+        paintSpanChips();
+        paintSpanHint();
 
         updatePresets();
     }
@@ -148,12 +164,103 @@ public final class PlanSection {
         paintLocks();
     }
 
-    /** 分析完把桌面探测到的文件夹占位告诉这里；后面每次重画排布都会用同一份值。 */
-    public void setFolderSpan(int span) {
-        this.folderSpan = span > 0 ? span : LayoutPlan.FOLDER_SPAN;
+    /**
+     * 分析完把读库探测到的<b>原始值</b>告诉这里，返回最终生效的占位。
+     *
+     * <p>调用方必须把返回值写回 {@code model.folderSpan}，让排屏与写库用同一个值，
+     * 否则又会变成「预览按 2×2、写库按 1×1」。
+     */
+    public int setFolderSpan(int detected) {
+        this.detectedSpan = detected > 0 ? detected : 0;
+        this.folderSpan = cfg.effectiveFolderSpan(this.detectedSpan);
+        paintSpanHint();
         if (lastGroups != null) {
             paintPlan();
         }
+        return folderSpan;
+    }
+
+    /** 当前生效的文件夹占位；切换手动模式、重新分析后都会变。 */
+    public int folderSpan() {
+        return folderSpan;
+    }
+
+    /** 当前是自动 / 手动 1×1 / 手动 2×2，确认框用它算出「改用另一种」按钮。 */
+    public int spanMode() {
+        return cfg.folderSpanMode;
+    }
+
+    /** 给状态行用的来源标签，如「（来源：坐标探测）」。 */
+    public String spanStatus() {
+        return "（来源：" + cfg.spanSource(detectedSpan) + "）";
+    }
+
+    // ───────────────────────── 文件夹大小 ─────────────────────────
+
+    /** 三枚 Chip：自动判断 / 强制 1×1 小文件夹 / 强制 2×2 大文件夹。 */
+    private void paintSpanChips() {
+        spanBox.removeAllViews();
+        spanBox.addView(buildSpanChip("自动", PlanConfig.SPAN_AUTO, 0));
+        spanBox.addView(buildSpanChip("小 1×1", PlanConfig.SPAN_SMALL, 1));
+        spanBox.addView(buildSpanChip("大 2×2", PlanConfig.SPAN_BIG, 2));
+    }
+
+    private View buildSpanChip(String label, final int mode, int index) {
+        boolean on = cfg.folderSpanMode == mode;
+        TextView chip = new TextView(act);
+        chip.setText(label);
+        chip.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
+        chip.setTypeface(null, on ? android.graphics.Typeface.BOLD
+                : android.graphics.Typeface.NORMAL);
+        chip.setGravity(Gravity.CENTER);
+        chip.setPadding(dp(8), dp(6), dp(8), dp(6));
+        chip.setBackgroundResource(on ? R.drawable.bg_pill_accent : R.drawable.bg_pill_idle);
+        chip.setTextColor(act.getColor(on ? R.color.accent : R.color.text_secondary));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        if (index > 0) {
+            lp.leftMargin = dp(6);
+        }
+        chip.setLayoutParams(lp);
+        chip.setOnClickListener(v -> setSpanMode(mode));
+        return chip;
+    }
+
+    /** 公开给确认框：写到一半发现尺寸不对，可以就地换一种再整理，不必退回第二步。 */
+    public void setSpanMode(int mode) {
+        if (cfg.folderSpanMode == mode) {
+            return;
+        }
+        cfg.folderSpanMode = mode;
+        cfg.save(act);
+        // 立即按新值重算，不等下一次「重新分析」：手动开关就是要当场看到屏数变化
+        folderSpan = cfg.effectiveFolderSpan(detectedSpan);
+        paintSpanChips();
+        paintSpanHint();
+        paintPlan();
+        if (planChanged != null) {
+            planChanged.run();
+        }
+    }
+
+    /** 一行说明：当前按几格排、依据是什么、以及「不对就切哪个」。 */
+    private void paintSpanHint() {
+        int slots = LayoutPlan.slotsForSpan(folderSpan);
+        String src = cfg.spanSource(detectedSpan);
+        StringBuilder sb = new StringBuilder();
+        sb.append(src).append("：按 ").append(folderSpan).append('×').append(folderSpan)
+                .append(" 格排，每屏 ").append(slots).append(" 个。")
+                .append("两种尺寸都会避开小组件和旧文件夹，不会重叠。");
+        if (folderSpan == 1) {
+            sb.append("若桌面上文件夹互相压住，改选「大 2×2」。");
+        } else if (cfg.folderSpanMode == PlanConfig.SPAN_AUTO
+                && detectedSpan == 0 && cfg.verifiedFolderSpan == 0) {
+            sb.append("桌面没有可判断的文件夹，先按不会重叠的大文件夹排；")
+                    .append("若你的桌面是小图标文件夹，改选「小 1×1」。");
+        } else {
+            sb.append("若桌面每屏能放更多文件夹，改选「小 1×1」。");
+        }
+        tvSpanHint.setText(sb.toString());
     }
 
     public java.util.Set<Integer> lockedScreens() {

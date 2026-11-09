@@ -25,6 +25,7 @@ import io.github.cobylinweiqi.deskly.organize.DeskPlan;
 import io.github.cobylinweiqi.deskly.organize.DesktopModel;
 import io.github.cobylinweiqi.deskly.organize.IconPalette;
 import io.github.cobylinweiqi.deskly.organize.LayoutPlan;
+import io.github.cobylinweiqi.deskly.organize.PlanConfig;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -78,6 +79,8 @@ public final class DesktopSection {
     private DesktopModel model;
     /** 当前方案算出来的整理计划，null 表示还没算。 */
     private DeskPlan desk;
+    /** 确认框里点了「改用另一种尺寸」：等重算结束后把确认框弹回来。 */
+    private boolean reopenConfirm;
     /** 计划是按哪个方案算的，切方案后要重算。 */
     private AppClassifier.Scheme deskScheme;
     /** 包名 → 颜色组名。颜色方案要 rasterize 图标，切回同一方案不必重算一遍。 */
@@ -211,7 +214,9 @@ public final class DesktopSection {
                 model = fModel;
                 // 屏数变了，锁定 Chip 与越界的锁定记录要一起收敛
                 plan.setScreenCount(fModel.screenCount);
-                plan.setFolderSpan(fModel.folderSpan);
+                // 0.16.4：返回的是「手动指定 / 上次写回校验 / 坐标探测 / 保守默认」综合后的
+                // 生效值。写回 model，让 DeskPlan、DeskWriter、状态行说的是同一句话。
+                fModel.folderSpan = plan.setFolderSpan(fModel.folderSpan);
                 renderOverview(fModel, fInstalled, fMissing);
                 rebuild();
             });
@@ -278,7 +283,7 @@ public final class DesktopSection {
                 + hotseat + " 个在底部固定栏（不动）" + lockNote
                 + "。下面两个方案都算好了，选中即预览。"
                 + "\n文件夹占 " + m.folderSpan + "×" + m.folderSpan + " 格 · 每屏可放 "
-                + LayoutPlan.slotsForSpan(m.folderSpan) + " 个"
+                + LayoutPlan.slotsForSpan(m.folderSpan) + " 个 " + plan.spanStatus()
                 + "\n诊断：" + (m.profile == null ? "无" : m.profile.diagnostics()));
 
         if (missing > 0) {
@@ -310,6 +315,8 @@ public final class DesktopSection {
         if (model == null || busy) {
             return;
         }
+        // 用户切了「小 1×1 / 大 2×2」后，方案要当场按新占位重算，不等下次重新分析
+        model.folderSpan = plan.folderSpan();
         final AppClassifier.Scheme scheme = plan.scheme();
         final boolean blank = plan.firstScreenBlank();
         final Map<String, Integer> pins = new LinkedHashMap<>(plan.pins());
@@ -443,7 +450,8 @@ public final class DesktopSection {
         tvSummary.setText("整理后 " + p.buckets.size() + " 个文件夹 · 共 " + p.screenCount
                 + " 屏" + (p.lockedCount > 0 ? "（锁定 " + p.lockedCount + " 屏）" : "")
                 + " · 每屏最多 " + LayoutPlan.slotsForSpan(p.folderSpan) + " 个"
-                + "（文件夹占 " + p.folderSpan + "×" + p.folderSpan + "）");
+                + "（文件夹占 " + p.folderSpan + "×" + p.folderSpan + "）"
+                + "\n" + p.placementNote());
         for (DeskPlan.Bucket b : p.buckets) {
             groupBox.addView(buildBucket(b));
         }
@@ -460,8 +468,13 @@ public final class DesktopSection {
         btnApply.setEnabled(true);
         btnApply.setText("应用方案 · 整理 " + p.total + " 个图标");
         tvApplyHint.setText("按「" + (deskScheme == null ? "当前方案" : deskScheme.title)
-                + "」写入 " + p.buckets.size() + " 个文件夹 · 写入前自动备份");
+                + "」写入 " + p.buckets.size() + " 个文件夹 · 写入前自动备份"
+                + "\n" + p.placementNote());
         applyBar.setVisibility(View.VISIBLE);
+        if (reopenConfirm) {
+            reopenConfirm = false;
+            confirmApply();
+        }
     }
 
     /** 一个分组的卡片：色条 + 名称 + 数量 + 屏号，下面是图标缩略。 */
@@ -672,15 +685,32 @@ public final class DesktopSection {
                         .append(" 个应用，说明大量图标被判成了「非应用」，请把这几行数字发我。");
             }
         }
+        sb.append("\n\n文件夹按 ").append(desk.folderSpan).append('×')
+                .append(desk.folderSpan).append(" 格排（每屏 ")
+                .append(LayoutPlan.slotsForSpan(desk.folderSpan)).append(" 个）")
+                .append(plan.spanStatus()).append("。")
+                .append(desk.placementNote())
+                .append("\n若桌面上文件夹仍叠在一起，直接点下面的按钮换一种尺寸再整理。");
         if (desk.unknownCount > 0) {
             sb.append("\n\n还有 ").append(desk.unknownCount)
                     .append(" 个应用没认出类别，会集中在「其它」；认不出的系统预装已归到「系统」。");
         }
 
+        // 0.16.5：把「选 1×1 还是 2×2」摆到动手前最后一刻。桌面到底按哪种尺寸渲染
+        // 文件夹，只有用户看得见；以前要退回第二步找开关，很多人就这么直接应用了。
+        // 按「当前实际生效的占位」给另一种，而不是按模式：自动模式虽然没手动指定，
+        // 屏幕上已经是 2×2，这时该提供的是「改用小 1×1」。
+        final int other = plan.folderSpan() == 2
+                ? PlanConfig.SPAN_SMALL : PlanConfig.SPAN_BIG;
+        final String otherLabel = other == PlanConfig.SPAN_BIG ? "大 2×2" : "小 1×1";
         new AlertDialog.Builder(act)
                 .setTitle("整理 " + desk.total + " 个图标？")
                 .setMessage(sb.toString())
                 .setNegativeButton("取消", null)
+                .setNeutralButton("改用" + otherLabel + "排", (d, w) -> {
+                    reopenConfirm = true;
+                    plan.setSpanMode(other);
+                })
                 .setPositiveButton("开始整理", (d, w) -> doApply())
                 .show();
     }
@@ -738,7 +768,13 @@ public final class DesktopSection {
                     err = "读取最新布局失败，已中止（桌面未被改动）";
                 } else {
                     DesktopModel fresh = DesktopModel.read(copy, act, pkg);
-                    DeskPlan p = DeskPlan.build(act, fresh, scheme, blank, pins, locks, keepWidgets);
+                    // 0.16.5：这里重读的是一份 fresh 桌面，带的是探测原始值。不把界面上
+                    // 生效的 1×1 / 2×2 显式传进去，用户手动选的尺寸就会在写库时被丢掉：
+                    // 预览按 2×2 排、写入按 1×1 密排，桌面自然把文件夹叠在一起。
+                    final int span = plan.folderSpan();
+                    fresh.folderSpan = span;
+                    DeskPlan p = DeskPlan.build(act, fresh, scheme, blank, pins, locks,
+                            keepWidgets, span);
                     if (p.buckets.isEmpty()) {
                         err = "桌面上没有可整理的应用图标";
                     } else {

@@ -9,6 +9,7 @@ import io.github.cobylinweiqi.deskly.core.DbInject;
 import io.github.cobylinweiqi.deskly.organize.DeskPlan;
 import io.github.cobylinweiqi.deskly.organize.DesktopModel;
 import io.github.cobylinweiqi.deskly.organize.LauncherProfile;
+import io.github.cobylinweiqi.deskly.organize.PlanConfig;
 
 import java.io.File;
 import java.io.FileInputStream;
@@ -16,6 +17,7 @@ import java.io.FileOutputStream;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -37,12 +39,15 @@ import java.util.Set;
  *   <li>成员在文件夹里的位置由 <b>{@code cellX = 组内序号}、{@code cellY = 序号/4}</b>
  *       表达。真机上 16 个成员的文件夹正好是 cellX 0..15、cellY 0..3，说明它不是网格坐标
  *       而是"第几个"的编码，行号只是被顺手写成 4 个一行的结果。</li>
- *   <li>文件夹本体在桌面是 {@code spanX=spanY=2}，一屏 4×6 只能放 6 个。</li>
+ *   <li><b>文件夹本体占几格不再写死。</b>由 {@link DesktopModel} 从库里探测、
+ *       {@link PlanConfig} 允许手动覆盖，写回时一律取 {@code DeskPlan.folderSpan}。
+ *       0.14.1 时代的「一律 2×2、一屏 6 个」只对小米大文件夹机型成立；
+ *       HyperOS 也有把文件夹当 1 格图标排（一屏 24 个）的版本，硬套就会多分两屏。</li>
  * </ol>
  *
- * <p>上面三条是<b>小米</b>的约定。Launcher3 系（realme UI / ColorOS）由
- * {@link LauncherProfile} 切到自己的写法：文件夹 itemType=2、占 1×1 格、
- * 成员用 {@code rank} 排序。判据来自库本身，不按机型名硬切。
+ * <p>上面三条里，成员的写法是<b>小米</b>的约定。Launcher3 系（realme UI / ColorOS）由
+ * {@link LauncherProfile} 切到自己的写法：文件夹 itemType=2、成员用 {@code rank} 排序。
+ * 判据来自库本身，不按机型名硬切。
  *
  * <p>写库之后的生效问题不在这一层，全部交给 {@link DbInject}——那里才是"看起来成功、
  * 其实没生效"的根源。
@@ -70,6 +75,14 @@ public final class DeskWriter {
         public String verdict = "";
         /** 库里真实存在的文件夹行数（回读），用来发现「写了但桌面把行丢了」。 */
         public int folderRowsBack = -1;
+        /**
+         * 0.16.4：回读真库后，从桌面最终留下的文件夹坐标反推它把文件夹当几格
+         * （1 / 2），-1 表示样本不足。用来给「自动」模式记一份实测值，打破
+         * 「第一次猜错 → 下次读到自己写的密排坐标 → 永远判错」的固化。
+         */
+        public int spanReadBack = -1;
+        /** 0.16.5：回读真库后按实际 span 数出来的文件夹重叠对数，-1 表示没读到。 */
+        public int overlapBack = -1;
         /** 探测到的库结构诊断，直接进回执，真机排查时不必再猜。 */
         public String diagnostics = "";
     }
@@ -184,6 +197,31 @@ public final class DeskWriter {
             r.verdict += "\n⚠ 回读只剩 " + r.folderRowsBack + "/" + folderIds.size()
                     + " 个文件夹行——桌面可能丢弃了这些行（itemType 或必需列不匹配）";
         }
+        // 0.16.4：把「桌面真实怎么排文件夹」记进配置，供下次「自动」直接采用。
+        // 只记录，不自动二次灌库：桌面刚重启、可能还在自己整理库，再写一遍只会把局面搅乱。
+        // 用户看到不一致提示后，点一次「重新分析」再应用即可，应用前仍会自动拍快照。
+        if (r.spanReadBack > 0) {
+            PlanConfig cfg = PlanConfig.load(ctx);
+            cfg.recordVerifiedSpan(r.spanReadBack);
+            cfg.save(ctx);
+            if (r.spanReadBack != plan.folderSpan) {
+                r.verdict += "\n⚠ 桌面按 " + r.spanReadBack + "×" + r.spanReadBack
+                        + " 格排文件夹，与本次写入的 " + plan.folderSpan + "×"
+                        + plan.folderSpan + " 不一致；已记住，下次「自动」会用桌面真实值。"
+                        + "请点「重新分析」后再应用一次。";
+            } else {
+                r.verdict += "\n文件夹占位 " + r.spanReadBack + "×" + r.spanReadBack
+                        + " 与桌面一致，已记住供「自动」使用。";
+            }
+        }
+        if (r.overlapBack > 0) {
+            r.verdict += "\n⚠ 回读发现 " + r.overlapBack
+                    + " 对文件夹位置重叠：桌面很可能按另一种尺寸渲染文件夹。"
+                    + "请改用" + (plan.folderSpan == 1 ? "「大 2×2」" : "「小 1×1」")
+                    + "，重新分析后再整理一次。";
+        } else if (r.overlapBack == 0) {
+            r.verdict += "\n回读确认：文件夹之间无重叠";
+        }
         r.ok = true;
         r.msg = "已整理 " + r.moved + " 个图标 · " + r.folderCount + " 个文件夹"
                 + (r.removedFolders > 0 ? " · 清掉 " + r.removedFolders + " 个旧文件夹" : "")
@@ -217,6 +255,9 @@ public final class DeskWriter {
             // 和 LayoutPlan 写死的 2×2 从来没对齐过：HyperOS 桌面按 1 格排，
             // 13 个文件夹却被算成 3 屏，写回坐标也稀疏。
             int folderSpan = plan.folderSpan > 0 ? plan.folderSpan : (prof.isMiui() ? 2 : 1);
+            // 0.16.5：写库前最后一道闸。方案里只要还有文件夹互相压住、或压住小组件，
+            // 宁可整次中止也不灌进真库——快照还在，桌面一定没被改动，可以放心重来。
+            assertNoOverlap(plan, folderSpan);
             // 以桌面自己写出来的行做模板：厂商私有列（NOT NULL 或加载时必读的字段）
             // 会原样带过来，避免「插入成功、桌面却把文件夹行静默丢掉」。
             // 小米的模板为空，写库仍是 0.14.1 的手工构造。
@@ -267,6 +308,10 @@ public final class DeskWriter {
                         v.put("cellY", b.cellY);
                         v.put("spanX", folderSpan);
                         v.put("spanY", folderSpan);
+                        // 0.16.6：复用旧文件夹也必须改 itemType。原来只改坐标，
+                        // 旧 id 是 21（2×2 四宫格），用户选 1×1 后桌面照样画 2×2，
+                        // 于是「生成出来的还是 2×2」并和邻居叠住。
+                        v.put("itemType", prof.folderTypeFor(folderSpan));
                         putIf(v, cols, "extendContainer", -1);
                         putIf(v, cols, "isOnlySupportExtend", 0);
                         db.update(prof.table, v, "_id=?", new String[]{String.valueOf(id)});
@@ -286,7 +331,7 @@ public final class DeskWriter {
                         v.put("cellY", b.cellY);
                         v.put("spanX", folderSpan);
                         v.put("spanY", folderSpan);
-                        v.put("itemType", prof.folderType());
+                        v.put("itemType", prof.folderTypeFor(folderSpan));
                         putIf(v, cols, "appWidgetId", -1);
                         putIf(v, cols, "itemFlags", 0);
                         putIf(v, cols, "profileId", 0);
@@ -305,7 +350,7 @@ public final class DeskWriter {
                         if (newId <= 0) {
                             throw new IllegalStateException("新建文件夹「" + b.group
                                     + "」失败（表 " + prof.table + " · itemType "
-                                    + prof.folderType() + " · 已填 " + v.size() + " 列）");
+                                    + prof.folderTypeFor(folderSpan) + " · 已填 " + v.size() + " 列）");
                         }
                         kept.add((int) newId);
                         id = (int) newId;
@@ -376,7 +421,8 @@ public final class DeskWriter {
                 int removed = 0;
                 for (int id : oldIds) {
                     if (kept.contains(id) || protectedFolders.contains(id)
-                            || plan.keptFolderIds.contains(id)) {
+                            || plan.keptFolderIds.contains(id)
+                            || plan.strayFolderIds.contains(id)) {
                         continue;
                     }
                     removed += db.delete(prof.table, "_id=?", new String[]{String.valueOf(id)});
@@ -407,6 +453,32 @@ public final class DeskWriter {
                 db.close();
             } catch (Throwable ignored) {
             }
+        }
+    }
+
+    /**
+     * 0.16.5：写库前的硬校验。预览、最终排位都保证不重叠，但「钉屏钉过头」「旧文件夹
+     * 残留」「某条老路径绕过 DeskPlan」都可能再把它破坏掉。这里按矩形相交再数一遍，
+     * 有任何一处重叠就抛异常——{@link #apply} 会把它转成「桌面未被改动，可放心重试」。
+     */
+    private static void assertNoOverlap(DeskPlan plan, int span) {
+        List<DeskPlan.Rect> rects = new ArrayList<>();
+        for (DeskPlan.Bucket b : plan.buckets) {
+            rects.add(new DeskPlan.Rect(b.screen, b.cellX, b.cellY, span, span));
+        }
+        int n = DeskPlan.countOverlaps(rects);
+        for (List<DeskPlan.Rect> obs : plan.obstacles.values()) {
+            for (DeskPlan.Rect o : obs) {
+                for (DeskPlan.Rect r : rects) {
+                    if (r.intersects(o)) {
+                        n++;
+                    }
+                }
+            }
+        }
+        if (n > 0) {
+            throw new IllegalStateException("方案里有 " + n
+                    + " 处文件夹位置重叠，已中止写入（桌面未被改动）");
         }
     }
 
@@ -755,11 +827,27 @@ public final class DeskWriter {
                     }
                 }
                 r.folderRowsBack = folderRows;
+                // 0.16.5：桌面重启后可能按另一种尺寸重新摆文件夹，回读再数一遍重叠。
+                // 库坐标只是「我们写进去的」，但桌面若自己挪过，这里能直接看出来。
+                List<DeskPlan.Rect> backRects = new ArrayList<>();
+                try (Cursor c = db.rawQuery("SELECT screen,cellX,cellY,spanX,spanY FROM "
+                        + prof.table + " WHERE _id IN (" + in + ") AND itemType IN ("
+                        + prof.folderTypesIn() + ") AND container=-100", null)) {
+                    while (c.moveToNext()) {
+                        int sx = c.isNull(3) || c.getInt(3) < 1 ? plan.folderSpan : c.getInt(3);
+                        int sy = c.isNull(4) || c.getInt(4) < 1 ? plan.folderSpan : c.getInt(4);
+                        backRects.add(new DeskPlan.Rect(prof.fromDbScreen(c.getInt(0)),
+                                c.getInt(1), c.getInt(2), sx, sy));
+                    }
+                }
+                r.overlapBack = DeskPlan.countOverlaps(backRects);
                 // 顺带核对"文件夹是不是还在我写的那个屏上、那个格位上"。
                 // 用户报的"钉到第 6 屏却出现在第 2 屏"、"不是从左上角开始排"，
                 // 靠这一条就能把责任分清：是桌面把位置改了，还是我们压根没写对。
                 int shown = 0;
                 int posShown = 0;
+                /** 屏号/行 → 该行上文件夹最终的 cellX，用来反推桌面的真实占位。 */
+                Map<String, List<Integer>> rowXs = new LinkedHashMap<>();
                 for (int i = 0; i < folderIds.size() && i < plan.buckets.size(); i++) {
                     DeskPlan.Bucket b = plan.buckets.get(i);
                     int expected = prof.toDbScreen(b.screen);
@@ -775,6 +863,15 @@ public final class DeskWriter {
                             ax = c.getInt(1);
                             ay = c.getInt(2);
                         }
+                    }
+                    if (as != -999 && ax != -999) {
+                        String key = as + "/" + ay;
+                        List<Integer> xs = rowXs.get(key);
+                        if (xs == null) {
+                            xs = new ArrayList<>();
+                            rowXs.put(key, xs);
+                        }
+                        xs.add(ax);
                     }
                     if (as != expected && shown++ < 3) {
                         if (moved.length() > 0) {
@@ -794,6 +891,35 @@ public final class DeskWriter {
                                 .append(ay).append(')');
                     }
                 }
+                // 0.16.4：从桌面最终留下的坐标反推它到底把文件夹当几格。
+                // 我们写进去的步长就是 plan.folderSpan；若桌面重启后把相邻文件夹挪成
+                // 相隔 2 格，说明它实际按 2×2 渲染，下次「自动」应改用 2。
+                // 局限：桌面只是把方块叠在一起却不改库坐标时，这里看不出来，
+                // 那就得靠界面上的「小 1×1 / 大 2×2」手动开关。
+                int minGap = Integer.MAX_VALUE;
+                for (List<Integer> xs : rowXs.values()) {
+                    if (xs.size() < 2) {
+                        continue;
+                    }
+                    java.util.Collections.sort(xs);
+                    for (int i = 1; i < xs.size(); i++) {
+                        int gap = xs.get(i) - xs.get(i - 1);
+                        if (gap > 0 && gap < minGap) {
+                            minGap = gap;
+                        }
+                    }
+                }
+                if (minGap == 1) {
+                    r.spanReadBack = 1;
+                } else if (minGap >= 2 && minGap != Integer.MAX_VALUE) {
+                    r.spanReadBack = 2;
+                } else {
+                    r.spanReadBack = -1;
+                }
+                r.diagnostics += "\n写回后文件夹重叠对数 "
+                        + (r.overlapBack < 0 ? "（读不到）" : r.overlapBack);
+                r.diagnostics += "\n写回后文件夹相邻间距 "
+                        + (r.spanReadBack > 0 ? r.spanReadBack + " 格" : "（样本不足）");
                 // 0.16.3：真我「方案 2 屏、桌面 1 屏」的判定证据。桌面重启后会自己开库、
                 // 甚至把 screen 值改回去，光看写入前的计划看不出来，回执必须带上真库现状。
                 r.diagnostics += "\n写回后 screen 分布 " + screenHistogram(db, prof.table);

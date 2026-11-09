@@ -71,7 +71,8 @@ public class CrossRomSchemaTest {
         DesktopModel m = DesktopModel.read(db, ctx, "com.miui.home");
         assertTrue("方言", m.profile.isMiui());
         assertEquals("应用枚举", "0,14", m.profile.appTypesIn());
-        assertEquals("文件夹枚举", "21", m.profile.folderTypesIn());
+        // 0.16.6：HyperOS 4 的 2=小文件夹、21=2×2 大文件夹，两种都要认
+        assertEquals("文件夹枚举", "2,21", m.profile.folderTypesIn());
         assertEquals("首屏编号", 1, m.profile.screenBase);
     }
 

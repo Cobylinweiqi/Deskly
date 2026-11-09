@@ -124,6 +124,27 @@ public final class LauncherProfile {
         return folderTypes[0];
     }
 
+    /**
+     * 0.16.6：按要写的尺寸给出正确的文件夹 itemType。
+     *
+     * <p><b>真机证据。</b>MiuiHome RELEASE-8.01.02.8602（HyperOS 4）的日志里同时出现过：
+     * <pre>
+     * type=userFolder(2)      (0,0,1-1):工具      ← 1×1 小文件夹
+     * type=folder_2X2_4(21)   (0,2,2-2):购物      ← 2×2 四宫格大文件夹
+     * </pre>
+     * 同一个桌面按 itemType 决定画多大，{@code spanX/spanY} 只是跟着写。
+     * 旧版写库永远用 {@code folderType()}（从旧库探测到的 21），于是界面上选了
+     * 「小 1×1」也只是把 span 写成 1，桌面照旧画成 2×2 —— 1 格步长的坐标立刻叠在一起。
+     *
+     * <p>Launcher3 系（真我 / ColorOS）里 2 就是唯一的文件夹枚举，尺寸仍由 span 决定。
+     */
+    public int folderTypeFor(int span) {
+        if (isMiui()) {
+            return span >= 2 ? DesktopModel.TYPE_FOLDER : DesktopModel.TYPE_FOLDER_SMALL;
+        }
+        return folderTypes.length > 0 ? folderTypes[0] : DesktopModel.TYPE_FOLDER_SMALL;
+    }
+
     /** 拼 SQL 的 IN 列表，如 {@code 0,14} / {@code 0,1,6}。 */
     public String appTypesIn() {
         return join(appTypes);
@@ -239,16 +260,20 @@ public final class LauncherProfile {
             }
         }
 
+        Flavor pkgFlavor = byPackage(pkg);
         Flavor flavor;
         if (realFolderTypes.containsKey(21)) {
             flavor = Flavor.MIUI;
         } else if (realFolderTypes.containsKey(2)) {
-            flavor = Flavor.LAUNCHER3;
+            // 0.16.6：小米桌面把文件夹全切成小文件夹（2）之后，库里就只剩 2 了。
+            // 此时不能照旧判成 Launcher3 —— 那会把屏号起点、成员编码一并切错，
+            // 下一次整理直接写到另一个方言上。包名认得是小米就仍按小米处理。
+            flavor = pkgFlavor == Flavor.MIUI ? Flavor.MIUI : Flavor.LAUNCHER3;
         } else {
             // 库里一个文件夹都没有（新桌面 / 用户全删了）：不再拿"整表出现过 21"
             // 去猜——厂商的特殊条目很容易撞上这个数字。包名兜底反而更准：
             // com.miui.home→MIUI，com.android.launcher / oppo / coloros→LAUNCHER3。
-            flavor = byPackage(pkg);
+            flavor = pkgFlavor;
         }
 
         // 小米的 1 起屏号是 0.14.1 真机验证过的既有约定，这里固定不探测，
@@ -258,7 +283,8 @@ public final class LauncherProfile {
 
         int[] folders;
         if (flavor == Flavor.MIUI) {
-            folders = new int[]{DesktopModel.TYPE_FOLDER};
+            // 两种尺寸都是文件夹：读库、删旧、复用都要同时认 2 与 21。
+            folders = new int[]{DesktopModel.TYPE_FOLDER_SMALL, DesktopModel.TYPE_FOLDER};
         } else if (!realFolderTypes.isEmpty()) {
             folders = toArray(realFolderTypes.keySet());
         } else {

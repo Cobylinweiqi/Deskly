@@ -106,7 +106,9 @@ public final class LayoutPlan {
             // 候选位一律按「左上 → 右下」升序保存：索引 0 就是这一屏最靠左上的可用位，
             // 填屏时从索引 0 依次往后取。谁传进来一份乱序数组（比如按 HashSet 遍历出来的），
             // 都会让文件夹从屏中间开始摆，所以在这里排一次，比在每个调用点信任它便宜。
-            int[] src = (slots == null || slots.length == 0) ? DEFAULT_SLOTS : slots;
+            // 0.16.5：空数组表示「这一屏一个可用位都没有」（全被小组件压住），不是「没传」。
+            // 旧版把空数组换回默认的 6 个位，结果整屏占满时文件夹照样往日历上叠。
+            int[] src = slots == null ? DEFAULT_SLOTS : slots;
             int[] sorted = src.clone();
             java.util.Arrays.sort(sorted);
             this.slots = sorted;
@@ -197,8 +199,9 @@ public final class LayoutPlan {
             }
             Folder f = new Folder(e.getKey(), list.size());
             Integer pin = pins == null ? null : pins.get(e.getKey());
-            boolean usable = pin != null && pin > plan.lockedCount
-                    && !(firstScreenBlank && pin == 1);
+            // 0.16.5：钉屏必须落在新文件夹的可用区间里。旧判据只比较锁定屏数量，
+            // 锁定 2 屏时钉到第 2 屏（那已经是锁定屏）仍会被当成有效。
+            boolean usable = pin != null && pin >= plan.startScreen;
             if (usable) {
                 screenAt(byNumber, pin, slotsOf, plan.folderSpan).folders.add(f);
             } else {

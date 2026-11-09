@@ -432,6 +432,30 @@ public final class AppClassifier {
         return IconPalette.GROUP_COLORS.containsKey(name);
     }
 
+    /**
+     * 这个文件夹名是不是 Deskly 自己建的分组名（功能分组或颜色分组）。
+     *
+     * <p>0.16.4 用它识别「上次写回的产物」：库里整批文件夹都叫内置组名、且坐标严格
+     * 按 1 格密排时，那是我们自己写的布局，不能反过来当成「桌面天然按 1 格排文件夹」
+     * 的证据。否则第一次把占位猜成 1，下次读到自己写的相邻坐标又判成 1，永久固化。
+     */
+    public static boolean isBuiltinGroup(String name) {
+        if (name == null || name.isEmpty()) {
+            return false;
+        }
+        for (String s : ORDER) {
+            if (s.equals(name)) {
+                return true;
+            }
+        }
+        for (String s : COLOR_ORDER) {
+            if (s.equals(name)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /** 落在「其它」＝这台机器上没能认出类别，界面要如实报数。 */
     public static boolean isUnknown(String group) {
         return GROUP_OTHER.equals(group);
