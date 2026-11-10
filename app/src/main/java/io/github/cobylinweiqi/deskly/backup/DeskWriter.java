@@ -435,11 +435,24 @@ public final class DeskWriter {
                 db.endTransaction();
             }
 
-            // 逐条回读：UPDATE 返回 1 不等于真的落到了该在的地方
+            // 逐条回读：UPDATE 返回 1 不等于真的落到了该在的地方。
+            // 锁定屏上原地保留的文件夹不参与整理，它的成员不在 plan.total 里，
+            // 回读时必须排除——否则锁定屏上只要有一个装着应用的文件夹，
+            // 就会报「回读成员数 ≠ 计划」并整次中止。
+            StringBuilder keptIn = new StringBuilder();
+            for (int id : plan.keptFolderIds) {
+                if (keptIn.length() > 0) {
+                    keptIn.append(',');
+                }
+                keptIn.append(id);
+            }
             try (Cursor c = db.rawQuery(
                     "SELECT count(*) FROM " + prof.table
                             + " WHERE container>0 AND itemType IN ("
-                            + prof.appTypesIn() + ")", null)) {
+                            + prof.appTypesIn() + ")"
+                            + (keptIn.length() > 0
+                                    ? " AND container NOT IN (" + keptIn + ")" : ""),
+                    null)) {
                 if (c.moveToFirst()) {
                     int total = c.getInt(0);
                     if (total != plan.total) {
