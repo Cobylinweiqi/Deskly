@@ -4,7 +4,12 @@
     <!-- 列全量已安装应用，供分类引擎使用；normal 权限，安装即授予 -->
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
 
+    <!-- AI 辅助分类：只在用户点「AI 精确分类 / 测试连接」时访问用户自己填写的接口 -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- usesCleartextTraffic：局域网里的本地模型（Ollama / LM Studio）通常只有 http -->
     <application
+        android:usesCleartextTraffic="true"
         android:allowBackup="false"
         android:description="@string/module_desc"
         android:icon="@drawable/ic_launcher"
