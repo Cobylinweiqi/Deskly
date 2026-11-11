@@ -524,7 +524,68 @@ public final class AppClassifier {
         return groupByFunction(fromDesktop(pm, title, pkg));
     }
 
+    // ───────────────────────── AI 辅助分类 ─────────────────────────
+
+    /**
+     * AI 给出的「包名（小写）→ 组名」。空表 = 没启用，行为与没有这个功能时逐字相同。
+     *
+     * <p>放在这里而不是让调用方各自查：功能分组只有 {@link #groupByFunction(AppEntry)}
+     * 这一个入口，方案卡的组数预览、排屏、写库都走它，覆盖表挂在入口上三处才不会分家。
+     * 分类引擎本身不碰网络也不碰存储，表由 {@code ai.AiConfig#apply} 灌进来。
+     */
+    private static volatile Map<String, String> aiOverrides = Collections.emptyMap();
+
+    public static void setAiOverrides(Map<String, String> groups) {
+        Map<String, String> m = new java.util.HashMap<>();
+        if (groups != null) {
+            for (Map.Entry<String, String> en : groups.entrySet()) {
+                // 只收内置功能组：存盘的结果可能来自旧版本，组名对不上就当没有
+                if (en.getKey() != null && isFunctionGroup(en.getValue())) {
+                    m.put(lower(en.getKey()), en.getValue());
+                }
+            }
+        }
+        aiOverrides = m;
+    }
+
+    /** 功能方案的全部组名，按展示顺序。AI 分类只能从这里面选。 */
+    public static List<String> functionGroups() {
+        List<String> out = new ArrayList<>(ORDER.length);
+        Collections.addAll(out, ORDER);
+        return out;
+    }
+
+    private static boolean isFunctionGroup(String name) {
+        if (name == null) {
+            return false;
+        }
+        for (String s : ORDER) {
+            if (s.equals(name)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 功能分组的唯一入口：AI 认过的应用用 AI 的结果，其余走内置规则。
+     *
+     * <p>AI 排在精确包名表之前是有意的——用户主动跑了一次 AI 分类，要的就是它的判断；
+     * 不想要随时可以在配置里关掉或清除，回到 {@link #groupByRules}。
+     */
     public static String groupByFunction(AppEntry e) {
+        Map<String, String> ai = aiOverrides;
+        if (!ai.isEmpty()) {
+            String g = ai.get(lower(e.pkg));
+            if (g != null) {
+                return g;
+            }
+        }
+        return groupByRules(e);
+    }
+
+    /** 只按内置词典判，不看 AI 结果。界面用它算「AI 改动了几个」。 */
+    public static String groupByRules(AppEntry e) {
         String pkg = lower(e.pkg);
         String label = lower(e.label);
         String hit = firstExactHit(pkg);

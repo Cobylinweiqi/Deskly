@@ -101,6 +101,8 @@ public class MainActivity extends Activity {
                 findViewById(R.id.tvSpanHint));
 
         desktop = new DesktopSection(this, target, pageOrganize, plan);
+        // AI 辅助分类：构造时就把上次的分类结果交给分类引擎，要赶在第一次分析之前
+        new AiSection(this, desktop);
 
         // 换方案 / 改钉屏 / 勾留空 都要重算分组与屏位——预览和写入依据同一份结果
         plan.setPresetListener(s -> desktop.rebuild());

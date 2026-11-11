@@ -223,6 +223,40 @@ public final class DesktopSection {
         }, "deskly-desk-load").start();
     }
 
+    /**
+     * 给 AI 分类用：桌面上全部应用图标的 {包名, 应用名}，按包名去重；还没分析过返回空表。
+     *
+     * <p>名字取分类引擎实际用的那一份（桌面库 title 不可靠时由 PackageManager 补），
+     * 这样模型看到的和内置词典看到的是同一个名字。锁定屏上的也一并带上：
+     * 多问几个不费事，解锁后不用为它们再请求一次。底部固定栏不参与整理，不发。
+     */
+    public List<String[]> appsForAi() {
+        List<String[]> out = new ArrayList<>();
+        DesktopModel m = model;
+        if (m == null) {
+            return out;
+        }
+        Set<String> seen = new HashSet<>();
+        for (DesktopModel.Folder f : m.folders) {
+            for (DesktopModel.Item i : f.members) {
+                addForAi(i, seen, out);
+            }
+        }
+        for (DesktopModel.Item i : m.looseOnDesktop) {
+            addForAi(i, seen, out);
+        }
+        return out;
+    }
+
+    private void addForAi(DesktopModel.Item i, Set<String> seen, List<String[]> out) {
+        if (!i.isApp() || i.pkg == null || i.pkg.isEmpty() || !seen.add(i.pkg)) {
+            return;
+        }
+        AppEntry e = AppClassifier.fromDesktop(act.getPackageManager(), i.title, i.pkg);
+        String name = e.pmLabel != null && !e.pmLabel.isEmpty() ? e.pmLabel : i.title;
+        out.add(new String[]{i.pkg, name == null ? "" : name});
+    }
+
     private void collectPkgs(DesktopModel m, Set<String> out) {
         for (DesktopModel.Folder f : m.folders) {
             for (DesktopModel.Item i : f.members) {
